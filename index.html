@@ -32,113 +32,122 @@ import * as THREE from 'three';
 import * as xb from 'xrblocks';
 
 /**
- * Experiencia interactiva para Meta Quest 3.
- * Crea una pelota que puedes ver en Passthrough y manipular con las manos.
+ * Experiencia interactiva para Meta Quest 3 / Android XR.
+ * Permite agarrar y desplazar una pelota en el espacio real.
  */
 class BallExperience extends xb.Script {
   constructor() {
     super();
     this.isGrabbing = false;
-    this._handToObject = null;
+    this._activeHand = null;
+    this._handToObject = new THREE.Matrix4();
     this.ball = null;
+    this.originalColor = 0x00ffcc;
+    this.grabColor = 0xffff00;
   }
 
   init() {
-    // 1. Iluminación para que los objetos se vean integrados
-    const ambientLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3);
-    this.add(ambientLight);
+    // Iluminación
+    this.add(new THREE.HemisphereLight(0xffffff, 0x666666, 3));
+    const sun = new THREE.DirectionalLight(0xffffff, 2);
+    sun.position.set(1, 2, 1);
+    this.add(sun);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
-    directionalLight.position.set(1, 2, 1);
-    this.add(directionalLight);
-
-    // 2. Crear la pelota (tamaño similar a una pelota de tenis: ~6.5cm de diámetro)
-    const radius = 0.035; 
-    const geometry = new THREE.SphereGeometry(radius, 32, 32);
+    // Crear la pelota (tamaño de pelota de tenis)
+    const geometry = new THREE.SphereGeometry(0.04, 32, 32);
     const material = new THREE.MeshPhongMaterial({
-      color: 0x00ffcc, // Color turquesa brillante
-      shininess: 100,
+      color: this.originalColor,
+      shininess: 80,
       transparent: true,
       opacity: 0.9
     });
 
     this.ball = new THREE.Mesh(geometry, material);
-    
-    // Posicionar la pelota frente al usuario (aproximadamente a la altura del pecho)
-    this.ball.position.set(0, 1.2, -0.5);
-    
+    // Posición inicial: frente al usuario a la altura de la vista
+    this.ball.position.set(0, 1.4, -0.6);
     this.add(this.ball);
     
-    console.log("Experiencia iniciada. Busca la pelota turquesa.");
+    console.log("Interactúa con la pelota usando el gesto de pinza o el gatillo.");
   }
 
-  // --- Lógica de Agarre (Grabbing) ---
-
+  /**
+   * Se dispara cuando el usuario inicia un "select" (pinch o click) sobre un objeto.
+   */
   onObjectGrabStart(event) {
     if (this.isGrabbing) return;
-    
-    // Verificar si estamos interactuando con la pelota
-    const intersection = xb.core.input.intersectObjectByController(event.target, this.ball);
-    if (intersection.length === 0) return;
+
+    // Verificar si el controlador/mano está tocando la pelota
+    const intersections = xb.core.input.intersectObjectByController(event.target, this.ball);
+    if (intersections.length === 0) return;
 
     this.isGrabbing = true;
-    this.ball.material.color.setHex(0xffff00); // Cambia a amarillo al agarrar
+    this._activeHand = event.target;
+    this.ball.material.color.setHex(this.grabColor);
 
-    // Calcular la matriz de compensación entre la mano y el objeto
+    // Calcular la relación espacial entre la mano y la pelota para un movimiento suave
     this.ball.updateMatrixWorld(true);
-    event.hand.updateMatrixWorld(true);
+    this._activeHand.updateMatrixWorld(true);
 
-    const handMatrixInverse = new THREE.Matrix4().copy(event.hand.matrixWorld).invert();
-    this._handToObject = new THREE.Matrix4().multiplyMatrices(handMatrixInverse, this.ball.matrixWorld);
+    const handMatrixInverse = new THREE.Matrix4().copy(this._activeHand.matrixWorld).invert();
+    this._handToObject.copy(handMatrixInverse).multiply(this.ball.matrixWorld);
   }
 
+  /**
+   * Se dispara continuamente mientras el usuario mantiene el agarre.
+   */
   onObjectGrabbing(event) {
-    if (!this.isGrabbing || !this._handToObject) return;
+    if (!this.isGrabbing || event.target !== this._activeHand) return;
 
-    // Actualizar la posición de la pelota para que siga a la mano
-    event.hand.updateMatrixWorld(true);
-    const newWorldMatrix = new THREE.Matrix4().multiplyMatrices(event.hand.matrixWorld, this._handToObject);
+    this._activeHand.updateMatrixWorld(true);
     
-    // Descomponer la matriz para aplicar posición y rotación
+    // Aplicar la transformación de la mano a la pelota manteniendo el desfase inicial
+    const newWorldMatrix = new THREE.Matrix4().multiplyMatrices(this._activeHand.matrixWorld, this._handToObject);
+    
     const pos = new THREE.Vector3();
     const quat = new THREE.Quaternion();
     const scale = new THREE.Vector3();
+    
     newWorldMatrix.decompose(pos, quat, scale);
 
     this.ball.position.copy(pos);
     this.ball.quaternion.copy(quat);
   }
 
+  /**
+   * Se dispara cuando el usuario suelta la pelota.
+   */
   onObjectGrabEnd(event) {
-    if (!this.isGrabbing) return;
-    
-    this.isGrabbing = false;
-    this._handToObject = null;
-    this.ball.material.color.setHex(0x00ffcc); // Vuelve a su color original
+    if (this.isGrabbing && event.target === this._activeHand) {
+      this.isGrabbing = false;
+      this._activeHand = null;
+      this.ball.material.color.setHex(this.originalColor);
+    }
   }
+
+  // Soporte para el simulador de escritorio (clicks de ratón)
+  onSelectStart(event) { this.onObjectGrabStart(event); }
+  onSelecting(event) { this.onObjectGrabbing(event); }
+  onSelectEnd(event) { this.onObjectGrabEnd(event); }
 }
 
-// Configuración de inicio
+// Configuración de arranque
 document.addEventListener('DOMContentLoaded', async function () {
   const options = new xb.Options();
   
-  // Habilitar manos y retículas para Quest 3
   options.enableHands();
   options.enableReticles();
   
-  // Configuración visual de las manos
+  // Visualización de manos para Quest 3
   options.hands.visualization = true;
   options.hands.visualizeMeshes = true;
+  
+  options.setAppTitle('Mover Pelota XR');
 
-  // Título de la app
-  options.setAppTitle('Passthrough Ball Quest 3');
-
-  // Inicializar el SDK y añadir nuestro script
   try {
     await xb.init(options);
     xb.add(new BallExperience());
-  } catch (e) {
-    console.error("Error al inicializar WebXR:", e);
+  } catch (err) {
+    console.error("Fallo al iniciar XR:", err);
   }
 });
     </script>
