@@ -32,124 +32,308 @@ import * as THREE from 'three';
 import * as xb from 'xrblocks';
 
 /**
- * Experiencia optimizada para estabilidad en Meta Quest 3.
- * Evita el congelamiento mediante pre-asignación de memoria y eventos de agarre nativos.
+ * Versión Ultra-Estable para Meta Quest 3.
+ * Utiliza el sistema de jerarquía (parenting) de Three.js para evitar crashes por cálculo de matrices.
  */
 class BallExperience extends xb.Script {
   constructor() {
     super();
-    // Pre-asignamos objetos para evitar Garbage Collection masivo en el loop
-    this._pos = new THREE.Vector3();
-    this._quat = new THREE.Quaternion();
-    this._scl = new THREE.Vector3();
-    this._m4 = new THREE.Matrix4();
-    this._handToObject = new THREE.Matrix4();
-    
-    this.isGrabbing = false;
-    this._activeHand = null;
     this.ball = null;
+    this.activeController = null;
+    this.isGrabbing = false;
     
-    this.colorNormal = 0x00ffcc;
-    this.colorGrab = 0xffff00;
+    // Colores pre-definidos
+    this.colorNormal = new THREE.Color(0x00ffcc);
+    this.colorGrab = new THREE.Color(0xffff00);
+    
+    // Variables temporales pre-asignadas (Cero recolección de basura)
+    this._worldPos = new THREE.Vector3();
+    this._worldQuat = new THREE.Quaternion();
   }
 
   init() {
-    // Luces
-    this.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3));
-    const direct = new THREE.DirectionalLight(0xffffff, 2);
-    direct.position.set(1, 2, 1);
-    this.add(direct);
+    // Iluminación básica y ligera
+    this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+    const sun = new THREE.DirectionalLight(0xffffff, 1);
+    sun.position.set(1, 2, 1);
+    this.add(sun);
 
-    // Pelota
-    const geo = new THREE.SphereGeometry(0.04, 32, 32);
-    const mat = new THREE.MeshPhongMaterial({
+    // Crear la pelota con pocos polígonos para máxima fluidez
+    const geometry = new THREE.SphereGeometry(0.04, 16, 16);
+    const material = new THREE.MeshPhongMaterial({
       color: this.colorNormal,
-      shininess: 80,
-      transparent: true,
-      opacity: 0.9
+      shininess: 50
     });
 
-    this.ball = new THREE.Mesh(geo, mat);
+    this.ball = new THREE.Mesh(geometry, material);
     this.ball.position.set(0, 1.3, -0.5);
     this.add(this.ball);
     
-    console.log("Experiencia estable iniciada.");
+    console.log("App iniciada. Interactúa con la pelota.");
   }
 
   /**
-   * onObjectGrabStart: Específico de XR Blocks para iniciar manipulación.
+   * Solo detectamos el inicio del agarre.
    */
-  onObjectGrabStart(event) {
+  onSelectStart(event) {
     if (this.isGrabbing) return;
 
-    // Solo agarramos si hay intersección con nuestra pelota
-    const intersections = xb.core.input.intersectObjectByController(event.target, this.ball);
-    if (intersections.length === 0) return;
+    const controller = event.target;
+    if (!controller) return;
 
-    this.isGrabbing = true;
-    this._activeHand = event.target;
-    this.ball.material.color.setHex(this.colorGrab);
-
-    // Calcular offset inicial una sola vez
-    this.ball.updateMatrixWorld(true);
-    this._activeHand.updateMatrixWorld(true);
+    // Realizar el test de intersección solo al hacer click/pinch
+    const intersections = xb.core.input.intersectObjectByController(controller, this.ball);
     
-    const handInv = this._m4.copy(this._activeHand.matrixWorld).invert();
-    this._handToObject.copy(handInv).multiply(this.ball.matrixWorld);
-  }
+    if (intersections.length > 0) {
+      this.isGrabbing = true;
+      this.activeController = controller;
+      
+      // Cambio de color visual
+      this.ball.material.color.copy(this.colorGrab);
 
-  /**
-   * onObjectGrabbing: Bucle optimizado sin creación de nuevos objetos.
-   */
-  onObjectGrabbing(event) {
-    if (!this.isGrabbing || event.target !== this._activeHand) return;
-
-    // Actualizamos posición usando las variables pre-asignadas del constructor
-    this._activeHand.updateMatrixWorld(true);
-    const worldM = this._m4.multiplyMatrices(this._activeHand.matrixWorld, this._handToObject);
-    
-    worldM.decompose(this._pos, this._quat, this._scl);
-
-    this.ball.position.copy(this._pos);
-    this.ball.quaternion.copy(this._quat);
-  }
-
-  /**
-   * onObjectGrabEnd: Limpieza total de referencias.
-   */
-  onObjectGrabEnd(event) {
-    if (this.isGrabbing && event.target === this._activeHand) {
-      this.resetState();
+      // --- TRUCO DE ESTABILIDAD: Parenting ---
+      // En lugar de calcular matrices cada frame, hacemos que la pelota sea 
+      // "hija" del controlador. Three.js se encarga de todo de forma nativa.
+      this.ball.getWorldPosition(this._worldPos);
+      this.ball.getWorldQuaternion(this._worldQuat);
+      
+      this.activeController.add(this.ball);
+      
+      // Ajustar posición local respecto al controlador
+      this.ball.position.set(0, 0, -0.05); 
+      this.ball.quaternion.set(0, 0, 0, 1);
     }
   }
 
-  // Fallback para controladores o simulador de escritorio
-  onSelectStart(event) { this.onObjectGrabStart(event); }
-  onSelecting(event) { this.onObjectGrabbing(event); }
-  onSelectEnd(event) { this.onObjectGrabEnd(event); }
+  /**
+   * Finalizamos el agarre y devolvemos la pelota a la escena global.
+   */
+  onSelectEnd(event) {
+    if (this.isGrabbing && event.target === this.activeController) {
+      this.releaseBall();
+    }
+  }
 
-  resetState() {
+  releaseBall() {
+    if (!this.ball || !this.activeController) return;
+
+    // Obtener posición final en el mundo antes de desvincular
+    this.ball.getWorldPosition(this._worldPos);
+    this.ball.getWorldQuaternion(this._worldQuat);
+
+    // Devolver la pelota a la escena principal (fuera del controlador)
+    this.add(this.ball);
+    
+    // Aplicar la posición final
+    this.ball.position.copy(this._worldPos);
+    this.ball.quaternion.copy(this._worldQuat);
+
+    this.ball.material.color.copy(this.colorNormal);
     this.isGrabbing = false;
-    this._activeHand = null;
-    if (this.ball) this.ball.material.color.setHex(this.colorNormal);
+    this.activeController = null;
+  }
+
+  /**
+   * Vigilancia constante para evitar cuelgues si se pierde el seguimiento.
+   */
+  update() {
+    // Si estamos agarrando pero el controlador desaparece o pierde seguimiento, liberamos.
+    if (this.isGrabbing && this.activeController) {
+        if (!this.activeController.visible) {
+            this.releaseBall();
+        }
+    }
   }
 }
 
+// Configuración de entrada
 document.addEventListener('DOMContentLoaded', async function () {
   const options = new xb.Options();
+  
   options.enableHands();
   options.enableReticles();
   
+  // Optamos por una visualización de manos más sencilla si persiste el crash
   options.hands.visualization = true;
   options.hands.visualizeMeshes = true;
   
-  options.setAppTitle('Estabilidad Quest 3');
+  options.setAppTitle('Safe Ball Experience');
 
   try {
     await xb.init(options);
     xb.add(new BallExperience());
   } catch (err) {
-    console.error("Error XR:", err);
+    console.error("Error al cargar XR:", err);
+  }
+});
+    </script>
+  </body>
+</html><!doctype html>
+<html lang="es">
+  <head>
+    <title>Pelota Interactiva XR | XR Blocks</title>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
+    <link type="text/css" rel="stylesheet" href="https://xrblocks.github.io/css/xr.css" />
+    <script>
+      window.litDisableBundleWarning = true;
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
+          "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
+          "lit/": "https://esm.run/lit@3/",
+          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/xrblocks.js",
+          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/addons/"
+        }
+      }
+    </script>
+  </head>
+
+  <body>
+    <script type="module">
+import 'xrblocks/addons/simulator/SimulatorAddons.js';
+import * as THREE from 'three';
+import * as xb from 'xrblocks';
+
+/**
+ * Versión Ultra-Estable para Meta Quest 3.
+ * Utiliza el sistema de jerarquía (parenting) de Three.js para evitar crashes por cálculo de matrices.
+ */
+class BallExperience extends xb.Script {
+  constructor() {
+    super();
+    this.ball = null;
+    this.activeController = null;
+    this.isGrabbing = false;
+    
+    // Colores pre-definidos
+    this.colorNormal = new THREE.Color(0x00ffcc);
+    this.colorGrab = new THREE.Color(0xffff00);
+    
+    // Variables temporales pre-asignadas (Cero recolección de basura)
+    this._worldPos = new THREE.Vector3();
+    this._worldQuat = new THREE.Quaternion();
+  }
+
+  init() {
+    // Iluminación básica y ligera
+    this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+    const sun = new THREE.DirectionalLight(0xffffff, 1);
+    sun.position.set(1, 2, 1);
+    this.add(sun);
+
+    // Crear la pelota con pocos polígonos para máxima fluidez
+    const geometry = new THREE.SphereGeometry(0.04, 16, 16);
+    const material = new THREE.MeshPhongMaterial({
+      color: this.colorNormal,
+      shininess: 50
+    });
+
+    this.ball = new THREE.Mesh(geometry, material);
+    this.ball.position.set(0, 1.3, -0.5);
+    this.add(this.ball);
+    
+    console.log("App iniciada. Interactúa con la pelota.");
+  }
+
+  /**
+   * Solo detectamos el inicio del agarre.
+   */
+  onSelectStart(event) {
+    if (this.isGrabbing) return;
+
+    const controller = event.target;
+    if (!controller) return;
+
+    // Realizar el test de intersección solo al hacer click/pinch
+    const intersections = xb.core.input.intersectObjectByController(controller, this.ball);
+    
+    if (intersections.length > 0) {
+      this.isGrabbing = true;
+      this.activeController = controller;
+      
+      // Cambio de color visual
+      this.ball.material.color.copy(this.colorGrab);
+
+      // --- TRUCO DE ESTABILIDAD: Parenting ---
+      // En lugar de calcular matrices cada frame, hacemos que la pelota sea 
+      // "hija" del controlador. Three.js se encarga de todo de forma nativa.
+      this.ball.getWorldPosition(this._worldPos);
+      this.ball.getWorldQuaternion(this._worldQuat);
+      
+      this.activeController.add(this.ball);
+      
+      // Ajustar posición local respecto al controlador
+      this.ball.position.set(0, 0, -0.05); 
+      this.ball.quaternion.set(0, 0, 0, 1);
+    }
+  }
+
+  /**
+   * Finalizamos el agarre y devolvemos la pelota a la escena global.
+   */
+  onSelectEnd(event) {
+    if (this.isGrabbing && event.target === this.activeController) {
+      this.releaseBall();
+    }
+  }
+
+  releaseBall() {
+    if (!this.ball || !this.activeController) return;
+
+    // Obtener posición final en el mundo antes de desvincular
+    this.ball.getWorldPosition(this._worldPos);
+    this.ball.getWorldQuaternion(this._worldQuat);
+
+    // Devolver la pelota a la escena principal (fuera del controlador)
+    this.add(this.ball);
+    
+    // Aplicar la posición final
+    this.ball.position.copy(this._worldPos);
+    this.ball.quaternion.copy(this._worldQuat);
+
+    this.ball.material.color.copy(this.colorNormal);
+    this.isGrabbing = false;
+    this.activeController = null;
+  }
+
+  /**
+   * Vigilancia constante para evitar cuelgues si se pierde el seguimiento.
+   */
+  update() {
+    // Si estamos agarrando pero el controlador desaparece o pierde seguimiento, liberamos.
+    if (this.isGrabbing && this.activeController) {
+        if (!this.activeController.visible) {
+            this.releaseBall();
+        }
+    }
+  }
+}
+
+// Configuración de entrada
+document.addEventListener('DOMContentLoaded', async function () {
+  const options = new xb.Options();
+  
+  options.enableHands();
+  options.enableReticles();
+  
+  // Optamos por una visualización de manos más sencilla si persiste el crash
+  options.hands.visualization = true;
+  options.hands.visualizeMeshes = true;
+  
+  options.setAppTitle('Safe Ball Experience');
+
+  try {
+    await xb.init(options);
+    xb.add(new BallExperience());
+  } catch (err) {
+    console.error("Error al cargar XR:", err);
   }
 });
     </script>
