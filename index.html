@@ -32,121 +32,124 @@ import * as THREE from 'three';
 import * as xb from 'xrblocks';
 
 /**
- * Experiencia interactiva optimizada para Meta Quest 3.
- * Soluciona el error de congelamiento de manos mediante una gestión de estado más limpia.
+ * Experiencia optimizada para estabilidad en Meta Quest 3.
+ * Evita el congelamiento mediante pre-asignación de memoria y eventos de agarre nativos.
  */
 class BallExperience extends xb.Script {
   constructor() {
     super();
+    // Pre-asignamos objetos para evitar Garbage Collection masivo en el loop
+    this._pos = new THREE.Vector3();
+    this._quat = new THREE.Quaternion();
+    this._scl = new THREE.Vector3();
+    this._m4 = new THREE.Matrix4();
+    this._handToObject = new THREE.Matrix4();
+    
     this.isGrabbing = false;
-    this._activeController = null;
-    this._offsetMatrix = new THREE.Matrix4();
+    this._activeHand = null;
     this.ball = null;
-    this.originalColor = 0x00ffcc;
-    this.grabColor = 0xffff00;
+    
+    this.colorNormal = 0x00ffcc;
+    this.colorGrab = 0xffff00;
   }
 
   init() {
-    // Iluminación optimizada
-    this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 3));
-    const light = new THREE.DirectionalLight(0xffffff, 1.5);
-    light.position.set(1, 1, 1);
-    this.add(light);
+    // Luces
+    this.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3));
+    const direct = new THREE.DirectionalLight(0xffffff, 2);
+    direct.position.set(1, 2, 1);
+    this.add(direct);
 
-    // Crear la pelota
-    const geometry = new THREE.SphereGeometry(0.04, 32, 32);
-    const material = new THREE.MeshPhongMaterial({
-      color: this.originalColor,
-      shininess: 60,
+    // Pelota
+    const geo = new THREE.SphereGeometry(0.04, 32, 32);
+    const mat = new THREE.MeshPhongMaterial({
+      color: this.colorNormal,
+      shininess: 80,
       transparent: true,
       opacity: 0.9
     });
 
-    this.ball = new THREE.Mesh(geometry, material);
-    // Posición inicial cómoda para interactuar
+    this.ball = new THREE.Mesh(geo, mat);
     this.ball.position.set(0, 1.3, -0.5);
     this.add(this.ball);
     
-    console.log("Sistema listo. Prueba a agarrar la pelota.");
+    console.log("Experiencia estable iniciada.");
   }
 
   /**
-   * Manejador estándar de inicio de selección.
+   * onObjectGrabStart: Específico de XR Blocks para iniciar manipulación.
    */
-  onSelectStart(event) {
+  onObjectGrabStart(event) {
     if (this.isGrabbing) return;
 
-    const controller = event.target;
-    // Usamos el sistema de intersección de XR Blocks para verificar contacto
-    const intersections = xb.core.input.intersectObjectByController(controller, this.ball);
+    // Solo agarramos si hay intersección con nuestra pelota
+    const intersections = xb.core.input.intersectObjectByController(event.target, this.ball);
+    if (intersections.length === 0) return;
+
+    this.isGrabbing = true;
+    this._activeHand = event.target;
+    this.ball.material.color.setHex(this.colorGrab);
+
+    // Calcular offset inicial una sola vez
+    this.ball.updateMatrixWorld(true);
+    this._activeHand.updateMatrixWorld(true);
     
-    if (intersections.length > 0) {
-      this.isGrabbing = true;
-      this._activeController = controller;
-      this.ball.material.color.setHex(this.grabColor);
-
-      // Guardamos la transformación relativa entre el controlador y la pelota
-      // Esto evita que la pelota "salte" al centro de la mano de forma brusca
-      this.ball.updateMatrixWorld(true);
-      controller.updateMatrixWorld(true);
-
-      const mInverse = new THREE.Matrix4().copy(controller.matrixWorld).invert();
-      this._offsetMatrix.copy(mInverse).multiply(this.ball.matrixWorld);
-    }
+    const handInv = this._m4.copy(this._activeHand.matrixWorld).invert();
+    this._handToObject.copy(handInv).multiply(this.ball.matrixWorld);
   }
 
   /**
-   * Manejador estándar durante el movimiento.
+   * onObjectGrabbing: Bucle optimizado sin creación de nuevos objetos.
    */
-  onSelecting(event) {
-    if (!this.isGrabbing || event.target !== this._activeController) return;
+  onObjectGrabbing(event) {
+    if (!this.isGrabbing || event.target !== this._activeHand) return;
 
-    const controller = this._activeController;
+    // Actualizamos posición usando las variables pre-asignadas del constructor
+    this._activeHand.updateMatrixWorld(true);
+    const worldM = this._m4.multiplyMatrices(this._activeHand.matrixWorld, this._handToObject);
     
-    // Aplicamos la posición de forma segura descomponiendo la matriz
-    // No usamos updateMatrixWorld aquí para evitar bucles infinitos en el render
-    const newWorldMatrix = new THREE.Matrix4().multiplyMatrices(controller.matrixWorld, this._offsetMatrix);
-    
-    const pos = new THREE.Vector3();
-    const quat = new THREE.Quaternion();
-    const scale = new THREE.Vector3();
-    
-    newWorldMatrix.decompose(pos, quat, scale);
+    worldM.decompose(this._pos, this._quat, this._scl);
 
-    this.ball.position.copy(pos);
-    this.ball.quaternion.copy(quat);
+    this.ball.position.copy(this._pos);
+    this.ball.quaternion.copy(this._quat);
   }
 
   /**
-   * Manejador estándar de fin de selección.
+   * onObjectGrabEnd: Limpieza total de referencias.
    */
-  onSelectEnd(event) {
-    if (this.isGrabbing && event.target === this._activeController) {
-      this.isGrabbing = false;
-      this._activeController = null;
-      this.ball.material.color.setHex(this.originalColor);
+  onObjectGrabEnd(event) {
+    if (this.isGrabbing && event.target === this._activeHand) {
+      this.resetState();
     }
+  }
+
+  // Fallback para controladores o simulador de escritorio
+  onSelectStart(event) { this.onObjectGrabStart(event); }
+  onSelecting(event) { this.onObjectGrabbing(event); }
+  onSelectEnd(event) { this.onObjectGrabEnd(event); }
+
+  resetState() {
+    this.isGrabbing = false;
+    this._activeHand = null;
+    if (this.ball) this.ball.material.color.setHex(this.colorNormal);
   }
 }
 
-// Inicialización de la aplicación
 document.addEventListener('DOMContentLoaded', async function () {
   const options = new xb.Options();
-  
-  // Configuración esencial para seguimiento de manos en Quest 3
   options.enableHands();
   options.enableReticles();
   
   options.hands.visualization = true;
   options.hands.visualizeMeshes = true;
   
-  options.setAppTitle('Pelota Interactiva Estable');
+  options.setAppTitle('Estabilidad Quest 3');
 
   try {
     await xb.init(options);
     xb.add(new BallExperience());
   } catch (err) {
-    console.error("Error al iniciar la experiencia:", err);
+    console.error("Error XR:", err);
   }
 });
     </script>
