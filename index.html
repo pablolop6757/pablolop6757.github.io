@@ -1,212 +1,146 @@
 <!doctype html>
 <html lang="es">
   <head>
-    <title>Mantenimiento Panel Eléctrico | XR Blocks</title>
+    <title>Pelota Interactiva XR | XR Blocks</title>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-    <!-- Estilos oficiales de XR Blocks -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
     <link type="text/css" rel="stylesheet" href="https://xrblocks.github.io/css/xr.css" />
-    <script>window.litDisableBundleWarning = true;</script>
-    
-    <!-- Mapa de importación obligatorio para XR Blocks -->
+    <script>
+      window.litDisableBundleWarning = true;
+    </script>
     <script type="importmap">
       {
         "imports": {
           "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
           "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
-          "troika-three-text": "https://cdn.jsdelivr.net/gh/protectwise/troika@028b81cf308f0f22e5aa8e78196be56ec1997af5/packages/troika-three-text/src/index.js",
           "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
+          "lit/": "https://esm.run/lit@3/",
           "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/xrblocks.js",
           "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/addons/"
         }
       }
     </script>
   </head>
+
   <body>
     <script type="module">
-      import * as THREE from 'three';
-      import * as xb from 'xrblocks';
+import 'xrblocks/addons/simulator/SimulatorAddons.js';
+import * as THREE from 'three';
+import * as xb from 'xrblocks';
 
-      /**
-       * MantenimientoGuiado: Clase que extiende xb.Script para gestionar
-       * los pasos de mantenimiento en Realidad Extendida.
-       */
-      class MantenimientoGuiado extends xb.Script {
-        constructor() {
-          super();
-          this.currentStep = 0;
-          this.stepObjects = [];
-          
-          // Definición de las instrucciones por paso
-          this.steps = [
-            {
-              text: "PASO 1: Desenergización total.\nBaja el interruptor general.",
-              color: "#ff3333"
-            },
-            {
-              text: "PASO 2: Verifica y aprieta todos\nlos bornes y conexiones eléctricas.",
-              color: "#ffcc00"
-            },
-            {
-              text: "PASO 3: Prueba de disyuntores.\nAlternar para verificar funcionamiento.",
-              color: "#00ff66"
-            }
-          ];
-        }
+/**
+ * Experiencia interactiva para Meta Quest 3.
+ * Crea una pelota que puedes ver en Passthrough y manipular con las manos.
+ */
+class BallExperience extends xb.Script {
+  constructor() {
+    super();
+    this.isGrabbing = false;
+    this._handToObject = null;
+    this.ball = null;
+  }
 
-        async init() {
-          // 1. Iluminación para que los objetos 3D se vean bien sobre la cámara
-          this.add(new THREE.HemisphereLight(0xffffff, 0x666666, 3));
-          const light = new THREE.DirectionalLight(0xffffff, 2);
-          light.position.set(1, 2, 1);
-          this.add(light);
+  init() {
+    // 1. Iluminación para que los objetos se vean integrados
+    const ambientLight = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3);
+    this.add(ambientLight);
 
-          // 2. Configuración de la interfaz espacial (UI)
-          this.setupUI();
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
+    directionalLight.position.set(1, 2, 1);
+    this.add(directionalLight);
 
-          // 3. Vincular el video de la cámara física al visor del panel
-          if (xb.core.deviceCamera) {
-            this.videoView.load(xb.core.deviceCamera);
-          }
+    // 2. Crear la pelota (tamaño similar a una pelota de tenis: ~6.5cm de diámetro)
+    const radius = 0.035; 
+    const geometry = new THREE.SphereGeometry(radius, 32, 32);
+    const material = new THREE.MeshPhongMaterial({
+      color: 0x00ffcc, // Color turquesa brillante
+      shininess: 100,
+      transparent: true,
+      opacity: 0.9
+    });
 
-          // 4. Crear los indicadores visuales 3D
-          this.createVisualHelpers();
+    this.ball = new THREE.Mesh(geometry, material);
+    
+    // Posicionar la pelota frente al usuario (aproximadamente a la altura del pecho)
+    this.ball.position.set(0, 1.2, -0.5);
+    
+    this.add(this.ball);
+    
+    console.log("Experiencia iniciada. Busca la pelota turquesa.");
+  }
 
-          // Iniciar en el paso 0
-          this.updateStep();
-        }
+  // --- Lógica de Agarre (Grabbing) ---
 
-        setupUI() {
-          // Panel principal que flota en el mundo real
-          this.panel = new xb.SpatialPanel({
-            width: 1.4,
-            height: 1.2,
-            backgroundColor: '#1a1a1aff',
-            showEdge: true
-          });
-          
-          // Posición: 1.4m de altura y 1.6m de distancia frente al usuario
-          this.panel.position.set(0, 1.4, -1.6);
-          this.add(this.panel);
+  onObjectGrabStart(event) {
+    if (this.isGrabbing) return;
+    
+    // Verificar si estamos interactuando con la pelota
+    const intersection = xb.core.input.intersectObjectByController(event.target, this.ball);
+    if (intersection.length === 0) return;
 
-          const grid = this.panel.addGrid();
-          
-          // Fila Superior: Visor de video de la cámara
-          const camRow = grid.addRow({weight: 0.5});
-          this.videoView = camRow.addVideo({ mode: 'stretch' });
+    this.isGrabbing = true;
+    this.ball.material.color.setHex(0xffff00); // Cambia a amarillo al agarrar
 
-          // Fila Central: Texto de instrucciones dinámico
-          this.instructionLabel = grid.addRow({weight: 0.3}).addText({
-            text: this.steps[0].text,
-            fontSize: 0.05,
-            fontColor: '#ffffff',
-          });
+    // Calcular la matriz de compensación entre la mano y el objeto
+    this.ball.updateMatrixWorld(true);
+    event.hand.updateMatrixWorld(true);
 
-          // Fila Inferior: Botón de interacción
-          const controlRow = grid.addRow({weight: 0.2});
-          this.nextBtn = controlRow.addCol({weight: 1.0}).addTextButton({
-            text: 'SIGUIENTE',
-            backgroundColor: '#4285f4',
-            fontColor: '#ffffff',
-            fontSize: 0.12
-          });
+    const handMatrixInverse = new THREE.Matrix4().copy(event.hand.matrixWorld).invert();
+    this._handToObject = new THREE.Matrix4().multiplyMatrices(handMatrixInverse, this.ball.matrixWorld);
+  }
 
-          // Acción al pulsar el botón
-          this.nextBtn.onTriggered = () => {
-            this.currentStep = (this.currentStep + 1) % this.steps.length;
-            this.updateStep();
-          };
-        }
+  onObjectGrabbing(event) {
+    if (!this.isGrabbing || !this._handToObject) return;
 
-        createVisualHelpers() {
-          const coneGeom = new THREE.ConeGeometry(0.06, 0.12, 16);
+    // Actualizar la posición de la pelota para que siga a la mano
+    event.hand.updateMatrixWorld(true);
+    const newWorldMatrix = new THREE.Matrix4().multiplyMatrices(event.hand.matrixWorld, this._handToObject);
+    
+    // Descomponer la matriz para aplicar posición y rotación
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    newWorldMatrix.decompose(pos, quat, scale);
 
-          // --- PASO 1: Flecha Roja (Puntero para el interruptor) ---
-          const step1Group = new THREE.Group();
-          const shaftGeom = new THREE.CylinderGeometry(0.02, 0.02, 0.2);
-          const redMat = new THREE.MeshPhongMaterial({ color: 0xff0000 });
-          const shaft = new THREE.Mesh(shaftGeom, redMat);
-          const head = new THREE.Mesh(coneGeom, redMat);
-          head.position.y = -0.15;
-          head.rotation.x = Math.PI;
-          step1Group.add(shaft, head);
-          step1Group.position.set(-0.4, 1.7, -1.0);
-          this.add(step1Group);
-          this.stepObjects[0] = step1Group;
+    this.ball.position.copy(pos);
+    this.ball.quaternion.copy(quat);
+  }
 
-          // --- PASO 2: Caja Amarilla (Área de bornes) ---
-          const boxGeom = new THREE.BoxGeometry(0.5, 0.4, 0.1);
-          const yellowMat = new THREE.MeshPhongMaterial({
-            color: 0xffff00,
-            transparent: true,
-            opacity: 0.4
-          });
-          const zoneBox = new THREE.Mesh(boxGeom, yellowMat);
-          zoneBox.position.set(0, 1.4, -0.8);
-          this.add(zoneBox);
-          this.stepObjects[1] = zoneBox;
+  onObjectGrabEnd(event) {
+    if (!this.isGrabbing) return;
+    
+    this.isGrabbing = false;
+    this._handToObject = null;
+    this.ball.material.color.setHex(0x00ffcc); // Vuelve a su color original
+  }
+}
 
-          // --- PASO 3: Flecha de Alternancia Verde ---
-          const step3Group = new THREE.Group();
-          const greenMat = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
-          const upHead = new THREE.Mesh(coneGeom, greenMat);
-          const downHead = upHead.clone();
-          upHead.position.y = 0.12;
-          downHead.position.y = -0.12;
-          downHead.rotation.x = Math.PI;
-          step3Group.add(upHead, downHead);
-          step3Group.position.set(0.4, 1.5, -1.0);
-          this.add(step3Group);
-          this.stepObjects[2] = step3Group;
-        }
+// Configuración de inicio
+document.addEventListener('DOMContentLoaded', async function () {
+  const options = new xb.Options();
+  
+  // Habilitar manos y retículas para Quest 3
+  options.enableHands();
+  options.enableReticles();
+  
+  // Configuración visual de las manos
+  options.hands.visualization = true;
+  options.hands.visualizeMeshes = true;
 
-        updateStep() {
-          this.instructionLabel.setText(this.steps[this.currentStep].text);
-          
-          // Cambiar visibilidad de los objetos 3D según el paso
-          this.stepObjects.forEach((obj, idx) => {
-            obj.visible = (idx === this.currentStep);
-          });
+  // Título de la app
+  options.setAppTitle('Passthrough Ball Quest 3');
 
-          // Lógica del botón de fin/reinicio
-          const isLast = (this.currentStep === this.steps.length - 1);
-          this.nextBtn.setText(isLast ? "REINICIAR" : "SIGUIENTE");
-          this.nextBtn.backgroundColor = isLast ? "#34a853" : "#4285f4";
-        }
-
-        update() {
-          // Tiempo para animaciones suaves
-          const t = performance.now() * 0.005;
-
-          // Animación Paso 1: Salto vertical
-          if (this.stepObjects[0].visible) {
-            this.stepObjects[0].position.y = 1.7 + Math.sin(t * 3) * 0.08;
-          }
-
-          // Animación Paso 2: Brillo pulsante
-          if (this.stepObjects[1].visible) {
-            this.stepObjects[1].material.opacity = 0.2 + Math.abs(Math.sin(t)) * 0.4;
-          }
-
-          // Animación Paso 3: Movimiento de toggle
-          if (this.stepObjects[2].visible) {
-            this.stepObjects[2].position.y = 1.5 + Math.cos(t * 2) * 0.05;
-          }
-        }
-      }
-
-      // Configuración de inicio
-      document.addEventListener('DOMContentLoaded', () => {
-        const options = new xb.Options();
-        options.enableUI();
-        options.enableReticles();
-        
-        // Habilitar la cámara para ver la realidad
-        options.enableCamera('environment'); 
-
-        xb.add(new MantenimientoGuiado());
-        xb.init(options);
-      });
+  // Inicializar el SDK y añadir nuestro script
+  try {
+    await xb.init(options);
+    xb.add(new BallExperience());
+  } catch (e) {
+    console.error("Error al inicializar WebXR:", e);
+  }
+});
     </script>
   </body>
 </html>
