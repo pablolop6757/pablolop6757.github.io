@@ -38,7 +38,7 @@ import * as xb from 'xrblocks';
 
 /**
  * Aplicación de mantenimiento guiado para un panel eléctrico.
- * Optimizada para evitar bloqueos mediante interacción por proximidad.
+ * Ahora incluye detección avanzada, radar de proximidad para manos y gatillos láser.
  */
 class MaintenanceApp extends xb.Script {
   
@@ -50,15 +50,18 @@ class MaintenanceApp extends xb.Script {
     this.isWaitingForInteraction = false;
     this.isTransitioning = false;
     
+    // Herramientas para detectar clics del ratón en el PC
+    this.raycaster = new THREE.Raycaster();
+    this.pointer = new THREE.Vector2();
+
     // Altura base y profundidad de la puerta del panel
     const h = 1.4; // Centro del armario
-    const z = -0.8; // Profundidad (ligeramente sobresaliente para fácil toque)
+    const z = -0.8; // Profundidad (sobresaliendo un poco para fácil toque con las manos)
 
-    // Coordenadas aproximadas simulando el esquema de la imagen real
     this.steps = [
       {
         title: "Inicio",
-        text: "Mantenimiento del panel TSK.\n\nPuedes arrastrar este panel si te molesta.\nToca el cubo azul o apunta y dispara.",
+        text: "Mantenimiento del panel TSK.\n\nPuedes arrastrar este panel si te molesta.\nToca el cubo azul o apunta y haz clic.",
         markerPos: null
       },
       {
@@ -117,6 +120,9 @@ class MaintenanceApp extends xb.Script {
         markerPos: null
       }
     ];
+
+    // Escuchador de eventos para el ratón (PC / Móvil)
+    window.addEventListener('pointerdown', this.onPointerDown.bind(this));
   }
 
   async init() {
@@ -141,7 +147,9 @@ class MaintenanceApp extends xb.Script {
       edgeColor: '#3a3a4a'
     });
     
-    // Panel completamente independiente y arrastrable
+    this.uiPanel.draggable = true;
+    this.uiPanel.isRoot = true;
+
     this.uiPanel.position.set(-0.7, xb.core.user.height, -0.9);
     this.uiPanel.rotation.set(0, Math.PI / 6, 0); 
     this.add(this.uiPanel);
@@ -193,7 +201,6 @@ class MaintenanceApp extends xb.Script {
       
       this.panelModel = gltf.scene;
       
-      // Poner de pie
       this.panelModel.rotation.x = Math.PI / 2;
       this.panelModel.updateMatrixWorld(true);
       
@@ -222,8 +229,8 @@ class MaintenanceApp extends xb.Script {
   }
 
   createInteractionMarker() {
-    // Cubo para los puntos interactivos
-    const geometry = new THREE.BoxGeometry(0.08, 0.08, 0.08); // Ligeramente más grande para tocarlo fácil
+    // CUBO MÁS GRANDE: 12 cm en lugar de 8 cm, para que sea súper fácil de acertar
+    const geometry = new THREE.BoxGeometry(0.12, 0.12, 0.12); 
     
     this.markerMaterial = new THREE.MeshBasicMaterial({
       color: 0x0066ff,
@@ -233,12 +240,9 @@ class MaintenanceApp extends xb.Script {
     
     this.marker = new THREE.Mesh(geometry, this.markerMaterial);
     
-    // Borde brillante
     const edges = new THREE.EdgesGeometry(geometry);
     const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 }));
-    
-    // OPTIMIZACIÓN CLAVE: Evitamos que el motor calcule colisiones contra las líneas del cubo
-    line.raycast = () => {}; 
+    line.raycast = () => {}; // Ignoramos las líneas en los cálculos de rayo láser para mejorar rendimiento
     
     this.marker.add(line);
     this.marker.visible = false;
@@ -272,19 +276,17 @@ class MaintenanceApp extends xb.Script {
   }
 
   triggerSuccess() {
-    // Bloqueo para evitar múltiples activaciones simultáneas
     if (this.isTransitioning) return;
     this.isTransitioning = true;
     
-    // Feedback visual inmediato
     if (this.marker.visible) {
-      this.markerMaterial.color.setHex(0x00ff00); // Verde brillante
+      this.markerMaterial.color.setHex(0x00ff00); // Verde de éxito
     }
     
-    // Espera medio segundo y avanza de forma segura
+    // Transición suave
     setTimeout(() => {
       if (this.marker.visible) {
-        this.markerMaterial.color.setHex(0x0066ff); // Vuelve al azul
+        this.markerMaterial.color.setHex(0x0066ff); 
       }
       
       this.currentStepIndex++;
@@ -297,37 +299,87 @@ class MaintenanceApp extends xb.Script {
     }, 400);
   }
 
-  // MÉTODO 1: Apuntar y disparar (Mando)
-  onSelectStart(event) {
+  // MÉTODO 1: Clic con el ratón (PC / Simulador)
+  onPointerDown(event) {
     if (!this.isWaitingForInteraction || !this.marker.visible || this.isTransitioning) return;
 
-    const controller = event.target;
-    // Optimizacion: Solo comprobamos colisión contra el marcador, ignorando el resto del mundo
-    const intersections = xb.core.input.intersectObjectByController(controller, this.marker);
+    this.pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+    this.pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointer, xb.core.camera);
     
-    if (intersections && intersections.length > 0) {
+    const intersects = this.raycaster.intersectObject(this.marker);
+    if (intersects.length > 0) {
       this.triggerSuccess();
     }
   }
 
-  // MÉTODO 2: Tocar físicamente (Manos / Mando cercano) - SUPER OPTIMIZADO
+  // MÉTODO 2: Apuntar y disparar con mandos VR (Rayo láser y Gatillo)
+  onSelectStart(event) {
+    if (!this.isWaitingForInteraction || !this.marker.visible || this.isTransitioning) return;
+
+    const controller = event.target;
+    const intersection = xb.core.user.select(this.marker, controller);
+    if (intersection) {
+      this.triggerSuccess();
+    }
+  }
+
+  // MÉTODO 3: Toque nativo con Colisiones de XR Blocks
+  onObjectTouchStart(event) {
+    if (!this.isWaitingForInteraction || !this.marker.visible || this.isTransitioning) return;
+    // Si hay un impacto físico directo, activamos
+    this.triggerSuccess();
+  }
+
+  // MÉTODO 4 (A PRUEBA DE FALLOS): Rádar de proximidad matemática
   update() {
     super.update();
     
     if (this.marker && this.marker.visible) {
-      // Animación suave del cubo
+      // Rotación y pulso sutil del cubo azul
       this.marker.rotation.y += 0.01;
       this.marker.rotation.x += 0.01;
       const scale = 1.0 + Math.sin(performance.now() * 0.006) * 0.15;
       this.marker.scale.setScalar(scale);
 
-      // Comprobación de Proximidad: Si la mano se acerca a menos de 10cm, se activa.
-      // Esto consume 0 recursos comparado con el sistema de rayos y evita cuelgues.
+      // Si estamos esperando un toque...
       if (!this.isTransitioning && this.isWaitingForInteraction) {
+        
+        // Obtenemos la posición exacta del cubo en el mundo
+        const markerPos = new THREE.Vector3();
+        this.marker.getWorldPosition(markerPos);
+
+        // A. Distancia general: Muñecas / Centro del Mando (Rango 20 cm)
         for (const controller of xb.core.input.controllers) {
-          if (controller.position.distanceTo(this.marker.position) < 0.12) {
+          const ctrlPos = new THREE.Vector3();
+          controller.getWorldPosition(ctrlPos);
+          if (ctrlPos.distanceTo(markerPos) < 0.20) {
             this.triggerSuccess();
-            break; // Salimos del bucle para no lanzar múltiples eventos
+            return;
+          }
+        }
+
+        // B. Distancia precisa: Punta del dedo índice en tracking de manos (Rango 15 cm)
+        const userHands = xb.user?.hands || xb.core?.user?.hands;
+        if (userHands && userHands.hands) {
+          for (const hand of userHands.hands) {
+            if (hand && hand.joints && hand.joints['index-finger-tip']) {
+              const tip = hand.joints['index-finger-tip'].position;
+              if (tip) {
+                // Cálculo matemático de distancia 3D para evitar usar funciones complejas que saturen la memoria
+                const dist = Math.sqrt(
+                  Math.pow(tip.x - markerPos.x, 2) +
+                  Math.pow(tip.y - markerPos.y, 2) +
+                  Math.pow(tip.z - markerPos.z, 2)
+                );
+                
+                // Si la punta de tu dedo índice está a 15cm o menos, ¡activación automática!
+                if (dist < 0.15) {
+                  this.triggerSuccess();
+                  return;
+                }
+              }
+            }
           }
         }
       }
