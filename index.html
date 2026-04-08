@@ -38,7 +38,7 @@ import * as xb from 'xrblocks';
 
 /**
  * Aplicación de mantenimiento guiado para un panel eléctrico.
- * El progreso es totalmente automático al interactuar físicamente con el modelo.
+ * El progreso es totalmente automático al interactuar físicamente con los marcadores azules.
  */
 class MaintenanceApp extends xb.Script {
   
@@ -49,33 +49,70 @@ class MaintenanceApp extends xb.Script {
     this.panelModel = null;
     this.isWaitingForInteraction = false;
     
-    // Configuración de los pasos del tutorial.
-    // Ajusta las coordenadas 'markerPos' (x, y, z) para que el marcador rojo
-    // aparezca exactamente sobre los disyuntores de tu modelo 3D ya de pie.
+    // Configuración de los pasos del tutorial basados en el esquema
+    // IMPORTANTE: Ajusta las coordenadas 'markerPos' (x, y, z) probándolo en visor
+    // para que el cubo azul encaje en cada componente físico.
+    // El eje X es izquierda/derecha, el eje Y es arriba/abajo, el eje Z es adelante/atrás.
+    // El panel base está en x=0, z=-1.0 aprox.
     this.steps = [
       {
-        title: "Inicio del Mantenimiento",
-        text: "Bienvenido. Te guiaremos paso a paso en el mantenimiento del panel TSK.\n\nPulsa el botón 'Empezar' en este panel para iniciar.",
+        title: "Inicio",
+        text: "Mantenimiento del panel TSK.\n\nSigue las luces azules en el modelo.\nPulsa el botón abajo para iniciar.",
         markerPos: null
       },
       {
-        title: "Paso 1: Desenergizar",
-        text: "Baja el plomo (disyuntor central) para desenergizar todo el panel por seguridad.\n\nToca la zona resaltada en rojo en el panel 3D para confirmar.",
-        markerPos: new THREE.Vector3(0, 1.4, -0.9) // <- AJUSTAR ESTAS COORDENADAS
+        title: "Paso 1: Seccionador Principal",
+        text: "Localiza el seccionador principal (F1).\nAcciónalo para cortar la corriente general.\n\nToca el cubo azul para confirmar.",
+        markerPos: new THREE.Vector3(-0.2, 1.4, -0.9) // Ajustar para F1
       },
       {
-        title: "Paso 2: Disyuntores Secundarios",
-        text: "Baja y luego sube cada uno de los disyuntores secundarios para comprobar su estado mecánico.\n\nToca la nueva zona resaltada cuando termines.",
-        markerPos: new THREE.Vector3(0.2, 1.3, -0.9) // <- AJUSTAR ESTAS COORDENADAS
+        title: "Paso 2: Disyuntor Q1",
+        text: "Verifica el estado mecánico del disyuntor Q1.\nBájalo y súbelo.\n\nToca el cubo azul al terminar.",
+        markerPos: new THREE.Vector3(0.0, 1.4, -0.9) // Ajustar para Q1
       },
       {
-        title: "Paso 3: Re-energizar",
-        text: "Vuelve a activar el disyuntor central para restablecer la energía del sistema.\n\nToca el disyuntor principal de nuevo.",
-        markerPos: new THREE.Vector3(0, 1.4, -0.9) // Misma posición que el Paso 1
+        title: "Paso 3: Disyuntor Q2",
+        text: "Verifica el estado mecánico del disyuntor Q2.\nBájalo y súbelo.\n\nToca el cubo azul al terminar.",
+        markerPos: new THREE.Vector3(0.1, 1.4, -0.9) // Ajustar para Q2
       },
       {
-        title: "Mantenimiento Completado",
-        text: "¡Excelente! Has completado el mantenimiento preventivo del panel TSK.\n\nPuedes reiniciar el proceso si lo deseas.",
+        title: "Paso 4: Disyuntor Q3",
+        text: "Verifica el estado mecánico del disyuntor Q3.\nBájalo y súbelo.\n\nToca el cubo azul al terminar.",
+        markerPos: new THREE.Vector3(0.2, 1.4, -0.9) // Ajustar para Q3
+      },
+      {
+        title: "Paso 5: Selector Manual/Auto",
+        text: "Revisa el selector de modo (M).\nAsegúrate de que gira correctamente.\n\nToca el cubo azul para confirmar.",
+        markerPos: new THREE.Vector3(-0.1, 1.2, -0.9) // Ajustar para el selector (M)
+      },
+      {
+        title: "Paso 6: Pulsador Negro",
+        text: "Comprueba el retorno del pulsador negro (B).\n\nToca el cubo azul sobre el pulsador.",
+        markerPos: new THREE.Vector3(0.0, 1.2, -0.9) // Ajustar para el pulsador negro (B)
+      },
+      {
+        title: "Paso 7: Piloto Rojo",
+        text: "Revisa visualmente el piloto rojo (R).\n\nToca el cubo azul para confirmar.",
+        markerPos: new THREE.Vector3(0.1, 1.2, -0.9) // Ajustar para el piloto rojo (R)
+      },
+      {
+        title: "Paso 8: Piloto Amarillo",
+        text: "Revisa visualmente el piloto amarillo (Y).\n\nToca el cubo azul para confirmar.",
+        markerPos: new THREE.Vector3(0.2, 1.2, -0.9) // Ajustar para el piloto amarillo (Y)
+      },
+      {
+        title: "Paso 9: Piloto Verde",
+        text: "Revisa visualmente el piloto verde (G).\n\nToca el cubo azul para confirmar.",
+        markerPos: new THREE.Vector3(0.3, 1.2, -0.9) // Ajustar para el piloto verde (G)
+      },
+      {
+        title: "Paso 10: Restaurar Energía",
+        text: "Vuelve a activar el seccionador principal (F1) para reenergizar.\n\nToca el cubo azul.",
+        markerPos: new THREE.Vector3(-0.2, 1.4, -0.9) // Volver a la posición de F1
+      },
+      {
+        title: "¡Completado!",
+        text: "Mantenimiento preventivo finalizado con éxito.\n\nPuedes reiniciar el proceso.",
         markerPos: null
       }
     ];
@@ -83,59 +120,75 @@ class MaintenanceApp extends xb.Script {
 
   async init() {
     // 1. Añadir iluminación
-    this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+    this.add(new THREE.HemisphereLight(0xffffff, 0x666666, 2.5));
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
     dirLight.position.set(2, 5, 3);
     this.add(dirLight);
 
-    // 2. Crear panel UI de instrucciones (ahora un poco más centrado a la izquierda)
+    // 2. Crear panel UI mejorado
     this.createInstructionPanel();
 
-    // 3. Cargar el modelo 3D del Panel y ponerlo de pie
+    // 3. Cargar el modelo 3D (más pequeño)
     await this.loadElectricalPanel();
 
-    // 4. Crear el marcador 3D (Zonas interactivas)
+    // 4. Crear el marcador 3D (Cubo azul)
     this.createInteractionMarker();
 
-    // Inicializar el primer paso
+    // Iniciar
     this.updateStepUI();
   }
 
   createInstructionPanel() {
     this.uiPanel = new xb.SpatialPanel({
-      width: 1.0,
-      height: 0.8,
-      backgroundColor: '#1e1e1edd'
+      width: 0.9,
+      height: 0.7,
+      backgroundColor: '#1a1a24ee', // Color oscuro azulado
+      showEdge: true,               // Borde visible
+      edgeColor: '#3a3a4a'
     });
-    // Posicionamos el panel a la izquierda del armario
-    this.uiPanel.position.set(-0.7, xb.core.user.height, -1.2);
-    this.uiPanel.rotation.set(0, Math.PI / 8, 0); 
+    // Hacemos el panel NO arrastrable para que no desaparezca al tocarlo por error
+    this.uiPanel.draggable = false; 
+
+    // Posición a la izquierda, a la altura de los ojos, inclinado hacia el usuario
+    this.uiPanel.position.set(-0.6, xb.core.user.height, -0.9);
+    this.uiPanel.rotation.set(0, Math.PI / 6, 0); 
     this.add(this.uiPanel);
 
     const grid = this.uiPanel.addGrid();
     
-    this.titleText = grid.addRow({weight: 0.2}).addText({
+    // Título
+    this.titleText = grid.addRow({weight: 0.25}).addText({
       text: 'Cargando...',
-      fontColor: '#4CAF50',
-      fontSize: 0.08
+      fontColor: '#00ccff', // Azul neón
+      fontSize: 0.07
     });
     
-    this.descText = grid.addRow({weight: 0.6}).addText({
+    // Separador
+    grid.addRow({weight: 0.05}).addPanel({
+        backgroundColor: '#3a3a4a',
+        width: 0.8,
+        height: 0.01
+    });
+
+    // Descripción
+    this.descText = grid.addRow({weight: 0.5}).addText({
       text: 'Por favor espera...',
       fontColor: '#ffffff',
+      fontSize: 0.05,
+      textAlign: 'center'
+    });
+
+    // Botón / Indicador
+    const btnRow = grid.addRow({weight: 0.2});
+    btnRow.addCol({weight: 0.15});
+    this.actionBtn = btnRow.addCol({weight: 0.7}).addTextButton({
+      text: 'Empezar',
+      backgroundColor: '#0066ff',
       fontSize: 0.05
     });
+    btnRow.addCol({weight: 0.15});
 
-    const btnRow = grid.addRow({weight: 0.2});
-    btnRow.addCol({weight: 0.1}); // Espaciador
-    this.actionBtn = btnRow.addCol({weight: 0.8}).addTextButton({
-      text: 'Empezar',
-      backgroundColor: '#4CAF50',
-      fontSize: 0.06
-    });
-    btnRow.addCol({weight: 0.1}); // Espaciador
-
-    // El botón solo funciona cuando NO estamos esperando interacción 3D
+    // Lógica del botón (solo para Iniciar/Reiniciar)
     this.actionBtn.onTriggered = () => {
       if (!this.isWaitingForInteraction) {
         this.nextStep();
@@ -153,54 +206,58 @@ class MaintenanceApp extends xb.Script {
       
       this.panelModel = gltf.scene;
       
-      // --- PONER DE PIE EL ARMARIO ---
-      // Rotar 90 grados en el eje X para levantarlo
-      // (Si ves que queda boca abajo, cambia Math.PI/2 por -Math.PI/2)
+      // Rotar 90 grados para ponerlo de pie
       this.panelModel.rotation.x = Math.PI / 2;
-      
-      // Forzar la actualización de la matriz antes de medirlo
       this.panelModel.updateMatrixWorld(true);
       
-      // --- AUTO ESCALADO Y CENTRADO ---
       const box = new THREE.Box3().setFromObject(this.panelModel);
       const size = box.getSize(new THREE.Vector3());
       const center = box.getCenter(new THREE.Vector3());
 
-      // Buscamos la dimensión más grande y forzamos a que mida aprox 1.2 metros
+      // --- PANEL MÁS PEQUEÑO ---
+      // Reducimos el tamaño objetivo de 1.2m a 0.9m
       const maxDim = Math.max(size.x, size.y, size.z);
-      const targetSize = 1.2; 
+      const targetSize = 0.9; 
       const scale = maxDim > 0 ? targetSize / maxDim : 1;
       
       this.panelModel.scale.set(scale, scale, scale);
 
-      // Centramos el modelo frente a la cámara
+      // Centramos el modelo frente a la cámara (un poco más cerca: z = -1.0)
       this.panelModel.position.set(
         -center.x * scale,
         (-center.y * scale) + xb.core.user.height - 0.2, 
-        (-center.z * scale) - 1.2
+        (-center.z * scale) - 1.0
       );
       
       this.add(this.panelModel);
     } catch (error) {
-      console.error("Error al cargar el modelo 3D:", error);
+      console.error("Error al cargar el modelo:", error);
       this.titleText.setText("Error");
-      this.descText.setText("No se pudo cargar TSK_Box2.glb. Verifica el archivo.");
+      this.descText.setText("No se pudo cargar el modelo.");
     }
   }
 
   createInteractionMarker() {
-    // Un marcador esférico, rojo y semi-transparente
-    const geometry = new THREE.SphereGeometry(0.06, 16, 16);
-    const material = new THREE.MeshBasicMaterial({
-      color: 0xff3333,
-      transparent: true,
-      opacity: 0.7,
-      wireframe: true
-    });
-    this.marker = new THREE.Mesh(geometry, material);
-    this.marker.visible = false;
+    // --- CUBO AZUL ---
+    // Usamos BoxGeometry en lugar de SphereGeometry
+    const geometry = new THREE.BoxGeometry(0.06, 0.06, 0.06);
     
-    // Lo añadimos directamente a la escena global para coordenadas fáciles en metros
+    // Material con azul neón, semi-transparente, con bordes visibles (wireframe)
+    const material = new THREE.MeshBasicMaterial({
+      color: 0x0066ff,
+      transparent: true,
+      opacity: 0.6,
+      wireframe: false // Quitamos el wireframe para que parezca más un botón sólido
+    });
+    
+    this.marker = new THREE.Mesh(geometry, material);
+    
+    // Añadir un borde brillante al cubo para que destaque más
+    const edges = new THREE.EdgesGeometry(geometry);
+    const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 }));
+    this.marker.add(line);
+
+    this.marker.visible = false;
     this.add(this.marker);
   }
 
@@ -211,22 +268,22 @@ class MaintenanceApp extends xb.Script {
     this.descText.setText(step.text);
 
     if (step.markerPos) {
-      // ESTAMOS EN UN PASO INTERACTIVO
+      // PASO INTERACTIVO CON EL MODELO 3D
       this.isWaitingForInteraction = true;
       this.marker.position.copy(step.markerPos);
       this.marker.visible = true;
       
-      // Cambiamos el botón para que parezca un indicador inactivo y guíe al usuario al modelo 3D
-      this.actionBtn.setText('👉 Toca la marca roja');
-      this.actionBtn.options.backgroundColor = '#555555'; 
-      this.actionBtn.options.fontColor = '#aaaaaa'; 
+      // Botón inactivo como indicador visual
+      this.actionBtn.setText('👉 Toca el cubo azul');
+      this.actionBtn.options.backgroundColor = '#333333'; 
+      this.actionBtn.options.fontColor = '#888888'; 
     } else {
-      // ESTAMOS EN UN PASO DE MENÚ (Inicio o Fin)
+      // PASO DE MENÚ
       this.isWaitingForInteraction = false;
       this.marker.visible = false;
       
       this.actionBtn.setText(this.currentStepIndex === 0 ? 'Empezar' : 'Reiniciar');
-      this.actionBtn.options.backgroundColor = '#4CAF50';
+      this.actionBtn.options.backgroundColor = '#0066ff';
       this.actionBtn.options.fontColor = '#ffffff'; 
     }
     
@@ -236,13 +293,13 @@ class MaintenanceApp extends xb.Script {
   nextStep() {
     this.currentStepIndex++;
     if (this.currentStepIndex >= this.steps.length) {
-      this.currentStepIndex = 0; // Reiniciar
+      this.currentStepIndex = 0;
     }
     this.updateStepUI();
   }
 
   /**
-   * Pasa automáticamente al siguiente paso cuando el usuario toca la luz roja.
+   * Interacción automática al tocar el cubo azul.
    */
   onSelectStart(event) {
     if (!this.isWaitingForInteraction || !this.marker.visible) return;
@@ -251,24 +308,28 @@ class MaintenanceApp extends xb.Script {
     const intersection = xb.core.user.select(this.marker, controller);
     
     if (intersection) {
-      // Cambiar a verde por un breve instante para dar feedback y pasar de paso
-      this.marker.material.color.setHex(0x4CAF50);
+      // Feedback visual: el cubo se vuelve blanco brillante brevemente
+      this.marker.material.color.setHex(0xffffff);
       
       setTimeout(() => {
-        this.marker.material.color.setHex(0xff3333); // Restaurar color
-        this.nextStep(); // AVANCE AUTOMÁTICO
-      }, 300);
+        this.marker.material.color.setHex(0x0066ff); // Vuelve a azul
+        this.nextStep();
+      }, 250);
     }
   }
 
   update() {
     super.update();
     
-    // Animación de pulso continuo para que el marcador llame la atención
+    // Animación de rotación y pulso para el cubo azul
     if (this.marker && this.marker.visible) {
-      const scale = 1.0 + Math.sin(performance.now() * 0.005) * 0.2;
+      // Rotación suave
+      this.marker.rotation.y += 0.01;
+      this.marker.rotation.x += 0.01;
+      
+      // Pulso de tamaño
+      const scale = 1.0 + Math.sin(performance.now() * 0.005) * 0.15;
       this.marker.scale.setScalar(scale);
-      this.marker.rotation.y += 0.02;
     }
   }
 }
@@ -276,9 +337,9 @@ class MaintenanceApp extends xb.Script {
 document.addEventListener('DOMContentLoaded', function () {
   const options = new xb.Options();
   options.enableUI();
-  options.enableHands(); // Habilitar manos para la Meta Quest 3
+  options.enableHands(); 
   options.reticles.enabled = true;
-  options.setAppTitle('Mantenimiento TSK');
+  options.setAppTitle('TSK Mantenimiento');
 
   xb.add(new MaintenanceApp());
   xb.init(options);
