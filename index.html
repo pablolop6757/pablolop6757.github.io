@@ -37,8 +37,7 @@ import * as THREE from 'three';
 import * as xb from 'xrblocks';
 
 /**
- * Aplicación de mantenimiento guiado para un panel eléctrico.
- * Ahora incluye detección avanzada, radar de proximidad para manos y gatillos láser.
+ * Aplicación de mantenimiento guiado 100% estable.
  */
 class MaintenanceApp extends xb.Script {
   
@@ -48,82 +47,81 @@ class MaintenanceApp extends xb.Script {
     this.marker = null;
     this.panelModel = null;
     this.isWaitingForInteraction = false;
-    this.isTransitioning = false;
     
-    // Herramientas para detectar clics del ratón en el PC
+    // SISTEMA ANTI-BLOQUEO: Usamos un temporizador en lugar de estados booleanos
+    this.lastInteractionTime = 0; 
+    
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
 
-    // ALTURA CORREGIDA: Bajamos el centro del armario a 1.0 metros (altura pecho/cintura)
-    // Esto asegura que todo el panel quede perfectamente al alcance de las manos.
-    this.h = 1.0; 
-    const h = this.h;
-    const z = -0.8; // Profundidad (sobresaliendo un poco para fácil toque con las manos)
+    // Altura y profundidad base
+    const h = 1.0; 
+    const z = -0.85; 
 
+    // Posiciones en cuadrícula simulando la imagen
     this.steps = [
       {
         title: "Inicio",
-        text: "Mantenimiento del panel TSK.\n\nPuedes arrastrar este panel si te molesta.\nToca el cubo azul o apunta y haz clic.",
+        text: "Mantenimiento del panel TSK.\n\nPulsa 'Empezar' y sigue los cubos azules.\nAcerca la mano o apunta con el mando.",
         markerPos: null
       },
       {
         title: "Paso 1: Seccionador (F1)",
-        text: "Localiza el seccionador principal (F1) arriba a la izquierda.\n\nTócalo para desenergizar.",
-        markerPos: new THREE.Vector3(-0.2, h + 0.2, z) 
+        text: "Localiza el seccionador principal (F1).\n\nTócalo para desenergizar.",
+        markerPos: new THREE.Vector3(-0.2, h + 0.3, z) 
       },
       {
         title: "Paso 2: Disyuntor Q1",
         text: "Baja y sube el disyuntor Q1.\n\nToca el cubo azul al terminar.",
-        markerPos: new THREE.Vector3(-0.1, h + 0.05, z) 
+        markerPos: new THREE.Vector3(-0.15, h + 0.1, z) 
       },
       {
         title: "Paso 3: Disyuntor Q2",
         text: "Baja y sube el disyuntor Q2.\n\nToca el cubo azul al terminar.",
-        markerPos: new THREE.Vector3(0.0, h + 0.05, z) 
+        markerPos: new THREE.Vector3(0.0, h + 0.1, z) 
       },
       {
         title: "Paso 4: Disyuntor Q3",
         text: "Baja y sube el disyuntor Q3.\n\nToca el cubo azul al terminar.",
-        markerPos: new THREE.Vector3(0.1, h + 0.05, z) 
+        markerPos: new THREE.Vector3(0.15, h + 0.1, z) 
       },
       {
         title: "Paso 5: Selector (M)",
-        text: "Revisa el selector de modo Manual/Auto (M).\n\nToca el cubo azul para confirmar.",
-        markerPos: new THREE.Vector3(-0.1, h - 0.15, z) 
+        text: "Revisa el selector Manual/Auto (M).\n\nToca el cubo azul para confirmar.",
+        markerPos: new THREE.Vector3(-0.1, h - 0.1, z) 
       },
       {
         title: "Paso 6: Pulsador (B)",
-        text: "Comprueba el retorno del pulsador negro (B).\n\nToca el cubo azul.",
-        markerPos: new THREE.Vector3(0.1, h - 0.15, z) 
+        text: "Comprueba el pulsador negro (B).\n\nToca el cubo azul.",
+        markerPos: new THREE.Vector3(0.1, h - 0.1, z) 
       },
       {
         title: "Paso 7: Piloto Rojo (R)",
-        text: "Revisa visualmente el piloto rojo (R).\n\nToca el cubo azul.",
-        markerPos: new THREE.Vector3(-0.1, h - 0.3, z) 
+        text: "Revisa el piloto rojo (R).\n\nToca el cubo azul.",
+        markerPos: new THREE.Vector3(-0.15, h - 0.3, z) 
       },
       {
         title: "Paso 8: Piloto Amarillo (Y)",
-        text: "Revisa visualmente el piloto amarillo (Y).\n\nToca el cubo azul.",
+        text: "Revisa el piloto amarillo (Y).\n\nToca el cubo azul.",
         markerPos: new THREE.Vector3(0.0, h - 0.3, z) 
       },
       {
         title: "Paso 9: Piloto Verde (G)",
-        text: "Revisa visualmente el piloto verde (G).\n\nToca el cubo azul.",
-        markerPos: new THREE.Vector3(0.1, h - 0.3, z) 
+        text: "Revisa el piloto verde (G).\n\nToca el cubo azul.",
+        markerPos: new THREE.Vector3(0.15, h - 0.3, z) 
       },
       {
         title: "Paso 10: Reenergizar (F1)",
-        text: "Vuelve a activar el seccionador principal (F1) para restaurar la energía.\n\nToca el cubo.",
-        markerPos: new THREE.Vector3(-0.2, h + 0.2, z) 
+        text: "Activa el seccionador principal (F1) para restaurar la energía.\n\nToca el cubo.",
+        markerPos: new THREE.Vector3(-0.2, h + 0.3, z) 
       },
       {
         title: "¡Completado!",
-        text: "Mantenimiento finalizado con éxito.\n\nPuedes pulsar 'Reiniciar' para volver a empezar.",
+        text: "Mantenimiento finalizado con éxito.\n\nPuedes pulsar 'Reiniciar'.",
         markerPos: null
       }
     ];
 
-    // Escuchador de eventos para el ratón (PC / Móvil)
     window.addEventListener('pointerdown', this.onPointerDown.bind(this));
   }
 
@@ -141,6 +139,7 @@ class MaintenanceApp extends xb.Script {
   }
 
   createInstructionPanel() {
+    // Un SpatialPanel simple, arrastrable por defecto en XR Blocks
     this.uiPanel = new xb.SpatialPanel({
       width: 0.9,
       height: 0.7,
@@ -149,11 +148,7 @@ class MaintenanceApp extends xb.Script {
       edgeColor: '#3a3a4a'
     });
     
-    this.uiPanel.draggable = true;
-    this.uiPanel.isRoot = true;
-
-    // Ajustamos también la altura del panel flotante para que esté a mano
-    this.uiPanel.position.set(-0.7, this.h + 0.2, -0.9);
+    this.uiPanel.position.set(-0.7, 1.2, -0.9);
     this.uiPanel.rotation.set(0, Math.PI / 6, 0); 
     this.add(this.uiPanel);
 
@@ -188,7 +183,9 @@ class MaintenanceApp extends xb.Script {
     btnRow.addCol({weight: 0.15});
 
     this.actionBtn.onTriggered = () => {
-      if (!this.isWaitingForInteraction && !this.isTransitioning) {
+      const now = performance.now();
+      // Si estamos en un menú y ha pasado 1 segundo desde la última interacción
+      if (!this.isWaitingForInteraction && (now - this.lastInteractionTime > 1000)) {
         this.triggerSuccess();
       }
     };
@@ -203,7 +200,6 @@ class MaintenanceApp extends xb.Script {
       });
       
       this.panelModel = gltf.scene;
-      
       this.panelModel.rotation.x = Math.PI / 2;
       this.panelModel.updateMatrixWorld(true);
       
@@ -217,11 +213,9 @@ class MaintenanceApp extends xb.Script {
       
       this.panelModel.scale.set(scale, scale, scale);
 
-      // COLOCACIÓN DEL PANEL: Ahora usamos this.h para que coincida exactamente
-      // con la altura central que definimos para los cubos azules.
       this.panelModel.position.set(
         -center.x * scale,
-        (-center.y * scale) + this.h, 
+        (-center.y * scale) + 1.0, 
         (-center.z * scale) - 1.0 
       );
       
@@ -234,22 +228,16 @@ class MaintenanceApp extends xb.Script {
   }
 
   createInteractionMarker() {
-    // Cubo de 12 cm, fácil de tocar
-    const geometry = new THREE.BoxGeometry(0.12, 0.12, 0.12); 
+    // Cubo grande, sin bordes de alambre para evitar cuelgues del raycaster
+    const geometry = new THREE.BoxGeometry(0.15, 0.15, 0.15); 
     
     this.markerMaterial = new THREE.MeshBasicMaterial({
       color: 0x0066ff,
       transparent: true,
-      opacity: 0.7
+      opacity: 0.75
     });
     
     this.marker = new THREE.Mesh(geometry, this.markerMaterial);
-    
-    const edges = new THREE.EdgesGeometry(geometry);
-    const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 }));
-    line.raycast = () => {}; 
-    
-    this.marker.add(line);
     this.marker.visible = false;
     this.add(this.marker);
   }
@@ -281,17 +269,20 @@ class MaintenanceApp extends xb.Script {
   }
 
   triggerSuccess() {
-    if (this.isTransitioning) return;
-    this.isTransitioning = true;
+    const now = performance.now();
+    // Bloqueo estricto de 1.5 segundos para evitar toques múltiples / cuelgues
+    if (now - this.lastInteractionTime < 1500) return; 
+    
+    this.lastInteractionTime = now;
     
     if (this.marker.visible) {
-      this.markerMaterial.color.setHex(0x00ff00); // Verde de éxito
+      this.markerMaterial.color.setHex(0x00ff00); // Se pone Verde
     }
     
-    // Transición suave
+    // Cambia al siguiente paso después de 400ms
     setTimeout(() => {
       if (this.marker.visible) {
-        this.markerMaterial.color.setHex(0x0066ff); 
+        this.markerMaterial.color.setHex(0x0066ff); // Vuelve a Azul
       }
       
       this.currentStepIndex++;
@@ -299,14 +290,12 @@ class MaintenanceApp extends xb.Script {
         this.currentStepIndex = 0;
       }
       this.updateStepUI();
-      
-      this.isTransitioning = false; 
     }, 400);
   }
 
-  // MÉTODO 1: Clic con el ratón (PC / Simulador)
+  // MÉTODO 1: Clic con el ratón
   onPointerDown(event) {
-    if (!this.isWaitingForInteraction || !this.marker.visible || this.isTransitioning) return;
+    if (!this.isWaitingForInteraction || !this.marker.visible) return;
 
     this.pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
     this.pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -318,69 +307,58 @@ class MaintenanceApp extends xb.Script {
     }
   }
 
-  // MÉTODO 2: Apuntar y disparar con mandos VR (Rayo láser y Gatillo)
+  // MÉTODO 2: Gatillo con el mando
   onSelectStart(event) {
-    if (!this.isWaitingForInteraction || !this.marker.visible || this.isTransitioning) return;
+    if (!this.isWaitingForInteraction || !this.marker.visible) return;
 
     const controller = event.target;
+    
+    // Forma 1: Sistema nativo
     const intersection = xb.core.user.select(this.marker, controller);
     if (intersection) {
+      this.triggerSuccess();
+      return;
+    }
+    
+    // Forma 2: Respaldo manual seguro
+    const tempMatrix = new THREE.Matrix4();
+    tempMatrix.identity().extractRotation(controller.matrixWorld);
+    this.raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+    this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+    
+    const intersects = this.raycaster.intersectObject(this.marker);
+    if (intersects.length > 0) {
       this.triggerSuccess();
     }
   }
 
-  // MÉTODO 3: Toque nativo con Colisiones de XR Blocks
-  onObjectTouchStart(event) {
-    if (!this.isWaitingForInteraction || !this.marker.visible || this.isTransitioning) return;
-    this.triggerSuccess();
-  }
-
-  // MÉTODO 4 (A PRUEBA DE FALLOS): Rádar de proximidad matemática
+  // MÉTODO 3: Tocar con la mano directamente (El más estable)
   update() {
     super.update();
     
     if (this.marker && this.marker.visible) {
-      // Rotación y pulso sutil del cubo azul
-      this.marker.rotation.y += 0.01;
+      const now = performance.now();
+      
+      // Animación suave rotando el cubo
+      this.marker.rotation.y += 0.02;
       this.marker.rotation.x += 0.01;
-      const scale = 1.0 + Math.sin(performance.now() * 0.006) * 0.15;
-      this.marker.scale.setScalar(scale);
+      this.marker.scale.setScalar(1.0 + Math.sin(now * 0.005) * 0.1);
 
-      // Si estamos esperando un toque...
-      if (!this.isTransitioning && this.isWaitingForInteraction) {
+      // Si ha pasado el tiempo de enfriamiento, comprueba colisión por proximidad
+      if (this.isWaitingForInteraction && (now - this.lastInteractionTime > 1500)) {
         
-        const markerPos = new THREE.Vector3();
-        this.marker.getWorldPosition(markerPos);
+        const markerWorldPos = new THREE.Vector3();
+        this.marker.getWorldPosition(markerWorldPos);
 
-        // A. Distancia general: Muñecas / Centro del Mando (Rango 20 cm)
+        // Distancia sencilla a los controladores (las palmas de las manos en Quest 3)
         for (const controller of xb.core.input.controllers) {
           const ctrlPos = new THREE.Vector3();
           controller.getWorldPosition(ctrlPos);
-          if (ctrlPos.distanceTo(markerPos) < 0.20) {
+          
+          // Si el mando o la palma está a menos de 15 centímetros del cubo, ¡Éxito!
+          if (ctrlPos.distanceTo(markerWorldPos) < 0.15) {
             this.triggerSuccess();
-            return;
-          }
-        }
-
-        // B. Distancia precisa: Punta del dedo índice en tracking de manos (Rango 15 cm)
-        const userHands = xb.user?.hands || xb.core?.user?.hands;
-        if (userHands && userHands.hands) {
-          for (const hand of userHands.hands) {
-            if (hand && hand.joints && hand.joints['index-finger-tip']) {
-              const tip = hand.joints['index-finger-tip'].position;
-              if (tip) {
-                const dist = Math.sqrt(
-                  Math.pow(tip.x - markerPos.x, 2) +
-                  Math.pow(tip.y - markerPos.y, 2) +
-                  Math.pow(tip.z - markerPos.z, 2)
-                );
-                
-                if (dist < 0.15) {
-                  this.triggerSuccess();
-                  return;
-                }
-              }
-            }
+            return; 
           }
         }
       }
@@ -391,7 +369,12 @@ class MaintenanceApp extends xb.Script {
 document.addEventListener('DOMContentLoaded', function () {
   const options = new xb.Options();
   options.enableUI();
+  
+  // Opciones de manos seguras y por defecto en XR Blocks
   options.enableHands(); 
+  options.hands.enabled = true;
+  options.hands.visualization = true; 
+  
   options.reticles.enabled = true;
   options.simulator.defaultMode = xb.SimulatorMode.POSE;
   options.setAppTitle('TSK Mantenimiento');
