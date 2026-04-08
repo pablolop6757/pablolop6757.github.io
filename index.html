@@ -49,6 +49,9 @@ class MaintenanceApp extends xb.Script {
     this.panelModel = null;
     this.isWaitingForInteraction = false;
     
+    // Variable de seguridad para evitar colapsos por múltiples detecciones
+    this.isTransitioning = false;
+    
     // Altura base estimada para la cámara
     const h = 1.6; // Altura estándar aproximada de los ojos
 
@@ -140,7 +143,7 @@ class MaintenanceApp extends xb.Script {
       edgeColor: '#3a3a4a'
     });
     
-    // Panel arrastrable habilitado y marcado como raíz para mejor física
+    // Panel arrastrable habilitado
     this.uiPanel.draggable = true;
     this.uiPanel.isRoot = true;
 
@@ -180,7 +183,8 @@ class MaintenanceApp extends xb.Script {
     btnRow.addCol({weight: 0.15});
 
     this.actionBtn.onTriggered = () => {
-      if (!this.isWaitingForInteraction) {
+      // Usamos isTransitioning también aquí por seguridad
+      if (!this.isWaitingForInteraction && !this.isTransitioning) {
         this.nextStep();
       }
     };
@@ -280,19 +284,26 @@ class MaintenanceApp extends xb.Script {
   }
 
   onSelectStart(event) {
-    if (!this.isWaitingForInteraction || !this.marker.visible) return;
+    // Si no estamos esperando interacción, si el cubo no está visible, o si YA estamos en transición, ignoramos el toque
+    if (!this.isWaitingForInteraction || !this.marker.visible || this.isTransitioning) return;
 
     const controller = event.target;
     const intersection = xb.core.user.select(this.marker, controller);
     
     if (intersection) {
+      // Activamos el bloqueo: ya no registrará más toques hasta que acabe
+      this.isTransitioning = true;
+      
       // Éxito: El cubo se pone VERDE brillante
       this.markerMaterial.color.setHex(0x00ff00);
       
-      // Espera medio segundo para que el usuario vea que lo ha tocado bien, y avanza automáticamente
+      // Espera medio segundo y avanza de forma segura
       setTimeout(() => {
         this.markerMaterial.color.setHex(0x0066ff); // Vuelve al azul original
         this.nextStep(); // AVANCE AUTOMÁTICO
+        
+        // Desactivamos el bloqueo para el siguiente paso
+        this.isTransitioning = false; 
       }, 500);
     }
   }
