@@ -1,12 +1,8 @@
 <!doctype html>
 <html lang="es">
   <head>
-    <title>Pelota Interactiva XR | XR Blocks</title>
-    <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, user-scalable=no"
-    />
+    <title>Simulador de Panel Eléctrico | Meta Quest 3</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <link type="text/css" rel="stylesheet" href="https://xrblocks.github.io/css/xr.css" />
     <script>
       window.litDisableBundleWarning = true;
@@ -16,10 +12,15 @@
         "imports": {
           "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
           "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
+          "troika-three-text": "https://cdn.jsdelivr.net/gh/protectwise/troika@028b81cf308f0f22e5aa8e78196be56ec1997af5/packages/troika-three-text/src/index.js",
+          "troika-three-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-three-utils/src/index.js",
+          "troika-worker-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-worker-utils/src/index.js",
+          "bidi-js": "https://esm.sh/bidi-js@%5E1.0.2?target=es2022",
+          "webgl-sdf-generator": "https://esm.sh/webgl-sdf-generator@1.1.1/es2022/webgl-sdf-generator.mjs",
           "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
           "lit/": "https://esm.run/lit@3/",
-          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/xrblocks.js",
-          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/addons/"
+          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.10.0/build/xrblocks.js",
+          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.10.0/build/addons/"
         }
       }
     </script>
@@ -27,132 +28,260 @@
 
   <body>
     <script type="module">
-import 'xrblocks/addons/simulator/SimulatorAddons.js';
-import * as THREE from 'three';
-import * as xb from 'xrblocks';
+      import 'xrblocks/addons/simulator/SimulatorAddons.js';
+      import * as THREE from 'three';
+      import * as xb from 'xrblocks';
 
-/**
- * Versión mejorada con pelota más grande y agarre dinámico relativo.
- */
-class BallExperience extends xb.Script {
-  constructor() {
-    super();
-    this.ball = null;
-    this.activeController = null;
-    this.isGrabbing = false;
-    
-    // Colores pre-definidos
-    this.colorNormal = new THREE.Color(0x00ffcc);
-    this.colorGrab = new THREE.Color(0xffff00);
-    
-    // Almacenamos la posición y rotación relativa al momento de agarrar
-    this.localOffset = new THREE.Vector3();
-  }
+      /**
+       * Experiencia principal del panel eléctrico con el modelo físico subido.
+       * Permite al usuario interactuar con controles espaciales en WebXR
+       * que alteran el comportamiento del modelo TSK_Box2.
+       */
+      class ElectricalPanelApp extends xb.Script {
+        constructor() {
+          super();
+          // Variables de estado del sistema
+          this.powerOn = true;
+          this.voltage = 220;
+          this.emergency = false;
+          this.time = 0;
+          this.breakers = [];
+        }
 
-  init() {
-    // Añadimos luces para dar volumen a la pelota más grande
-    this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.5));
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
-    dirLight.position.set(1, 2, 1);
-    this.add(dirLight);
+        async init() {
+          this.setupEnvironment();
+          await this.loadUploadedModel();
+          this.createControlPanel();
+          this.updateSystemState();
+        }
 
-    // Pelota más grande (radio 0.12 en lugar de 0.04) y con material reactivo a la luz
-    const geometry = new THREE.SphereGeometry(0.12, 32, 32);
-    const material = new THREE.MeshPhongMaterial({
-      color: this.colorNormal,
-      transparent: true,
-      opacity: 0.9,
-      shininess: 60 // Añade un brillo para mejorar la percepción 3D
-    });
+        /**
+         * Configura las luces base del entorno.
+         */
+        setupEnvironment() {
+          this.ambientLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.5);
+          this.add(this.ambientLight);
 
-    this.ball = new THREE.Mesh(geometry, material);
-    this.ball.position.set(0, 1.3, -0.6); // Un poco más alejada para compensar el tamaño
-    this.add(this.ball);
-    
-    console.log("Experiencia cargada. Intenta agarrar la pelota.");
-  }
+          this.mainLight = new THREE.PointLight(0xffffff, 2.0, 10);
+          this.mainLight.position.set(0, 2, -1.5);
+          this.add(this.mainLight);
+        }
 
-  /**
-   * Identificamos el controlador y calculamos el "offset" para un agarre realista.
-   */
-  onSelectStart(event) {
-    if (this.isGrabbing) return;
+        /**
+         * Carga el modelo 3D proporcionado por el usuario usando xb.ModelViewer
+         */
+        async loadUploadedModel() {
+          this.modelViewer = new xb.ModelViewer({});
+          this.add(this.modelViewer);
+          
+          try {
+            await this.modelViewer.loadGLTFModel({
+              data: {
+                scale: {x: 1.0, y: 1.0, z: 1.0}, // Escala por defecto
+                path: '', // Directorio actual
+                model: 'TSK_Box2.glb',
+              },
+              setupPlatform: false,
+              renderer: xb.core.renderer,
+            });
+            
+            // Posicionamos el modelo a la derecha del panel
+            this.modelViewer.position.set(0.8, xb.core.user.height - 0.2, -xb.core.user.panelDistance);
+            
+          } catch(e) {
+            console.error("Error al cargar TSK_Box2.glb:", e);
+          }
+        }
 
-    const controller = event.target;
-    if (!controller) return;
+        /**
+         * Construye la Interfaz UI Espacial.
+         */
+        createControlPanel() {
+          // Panel base oscuro
+          this.panel = new xb.SpatialPanel({
+            width: 1.2,
+            height: 1.3,
+            backgroundColor: '#2b2b2baa'
+          });
+          this.panel.position.set(-0.4, xb.core.user.height, -xb.core.user.panelDistance);
+          this.add(this.panel);
 
-    const intersections = xb.core.input.intersectObjectByController(controller, this.ball);
-    
-    if (intersections.length > 0) {
-      this.isGrabbing = true;
-      this.activeController = controller;
-      this.ball.material.color.copy(this.colorGrab);
-      
-      // Magia del agarre: calculamos la diferencia espacial entre la mano y la pelota 
-      // en este instante exacto para no "teletransportar" la pelota al centro de la mano.
-      this.localOffset.copy(this.ball.position)
-        .sub(controller.position)
-        .applyQuaternion(controller.quaternion.clone().invert());
-    }
-  }
+          const grid = this.panel.addGrid();
 
-  /**
-   * Liberamos la pelota.
-   */
-  onSelectEnd(event) {
-    if (this.isGrabbing && event.target === this.activeController) {
-      this.isGrabbing = false;
-      this.activeController = null;
-      this.ball.material.color.copy(this.colorNormal);
-    }
-  }
+          // FILA 1: Título
+          grid.addRow({weight: 0.15}).addText({
+            text: 'PANEL ELÉCTRICO PRINCIPAL',
+            fontColor: '#fbbc05',
+            fontSize: 0.07
+          });
 
-  /**
-   * Actualizamos la posición suavemente (Lerp) respetando el agarre inicial.
-   */
-  update() {
-    if (this.isGrabbing && this.activeController) {
-      // 1. Calculamos a dónde debe ir la pelota basándonos en la posición de la mano + el offset inicial
-      const targetPos = this.activeController.position.clone()
-        .add(this.localOffset.clone().applyQuaternion(this.activeController.quaternion));
-      
-      // 2. Interpolación lineal para el movimiento (0.4 lo hace más rápido y responsivo)
-      this.ball.position.lerp(targetPos, 0.4);
-      
-      // 3. Interpolación esférica para la rotación
-      this.ball.quaternion.slerp(this.activeController.quaternion, 0.2);
-    }
+          // FILA 2: Energía Principal
+          const powerRow = grid.addRow({weight: 0.2});
+          powerRow.addCol({weight: 0.7}).addText({
+            text: 'ENERGÍA DEL SISTEMA',
+            anchorX: 'left',
+            fontSize: 0.06
+          });
+          this.btnPower = powerRow.addCol({weight: 0.3}).addIconButton({
+            text: 'power_settings_new',
+            fontSize: 0.4
+          });
+          this.btnPower.onTriggered = () => this.togglePower();
 
-    // Seguridad: si el controlador deja de ser visible (se pierde el tracking), soltamos.
-    if (this.isGrabbing && this.activeController && !this.activeController.visible) {
-      this.isGrabbing = false;
-      this.activeController = null;
-      this.ball.material.color.copy(this.colorNormal);
-    }
-  }
-}
+          // FILA 3: Control de Voltaje
+          const voltRow = grid.addRow({weight: 0.2});
+          voltRow.addCol({weight: 0.4}).addText({
+            text: 'VOLTAJE',
+            anchorX: 'left',
+            fontSize: 0.06
+          });
+          const voltControls = voltRow.addCol({weight: 0.6});
+          
+          voltControls.addCol({weight: 0.3}).addIconButton({text: 'remove', fontSize: 0.3})
+            .onTriggered = () => this.adjustVoltage(-10);
+            
+          this.txtVolt = voltControls.addCol({weight: 0.4}).addText({
+            text: `${this.voltage} V`,
+            fontSize: 0.07,
+            fontColor: '#4285f4'
+          });
+          
+          voltControls.addCol({weight: 0.3}).addIconButton({text: 'add', fontSize: 0.3})
+            .onTriggered = () => this.adjustVoltage(10);
 
-// Configuración de entrada e inicio
-document.addEventListener('DOMContentLoaded', async function () {
-  const options = new xb.Options();
-  
-  options.enableHands();
-  
-  // Desactivamos retículas si lo deseas por rendimiento, aunque con la pelota grande ayuda a apuntar.
-  options.enableReticles(); 
-  
-  options.hands.visualization = true;
-  options.hands.visualizeMeshes = true;
-  
-  options.setAppTitle('Pelota Mejorada XR');
+          // FILA 4: Interruptores de Circuitos (Breakers)
+          const breakersRow = grid.addRow({weight: 0.25});
+          for (let i = 0; i < 4; i++) {
+            const bCol = breakersRow.addCol({weight: 0.25});
+            bCol.addRow({weight: 0.3}).addText({text: `C-${i+1}`, fontSize: 0.04});
+            
+            const btn = bCol.addRow({weight: 0.7}).addIconButton({
+              text: 'toggle_on',
+              fontSize: 0.4
+            });
+            
+            const breakerData = { state: true, btn: btn };
+            btn.onTriggered = () => this.toggleBreaker(breakerData);
+            this.breakers.push(breakerData);
+          }
 
-  try {
-    await xb.init(options);
-    xb.add(new BallExperience());
-  } catch (err) {
-    console.error("Fallo al iniciar:", err);
-  }
-});
+          // FILA 5: Parada de Emergencia
+          const stopRow = grid.addRow({weight: 0.2});
+          this.btnEmergency = stopRow.addTextButton({
+            text: 'PARADA DE EMERGENCIA',
+            backgroundColor: '#ea4335',
+            fontColor: '#ffffff',
+            fontSize: 0.06
+          });
+          this.btnEmergency.onTriggered = () => this.toggleEmergency();
+
+          this.panel.updateLayouts();
+        }
+
+        // Lógicas de los botones
+
+        togglePower() {
+          if (this.emergency) return;
+          this.powerOn = !this.powerOn;
+          this.updateSystemState();
+        }
+
+        adjustVoltage(delta) {
+          if (!this.powerOn || this.emergency) return;
+          this.voltage += delta;
+          if (this.voltage < 0) this.voltage = 0;
+          if (this.voltage > 400) this.voltage = 400;
+          this.txtVolt.setText(`${this.voltage} V`);
+        }
+
+        toggleBreaker(breakerData) {
+          if (this.emergency || !this.powerOn) return;
+          breakerData.state = !breakerData.state;
+          breakerData.btn.setText(breakerData.state ? 'toggle_on' : 'toggle_off');
+        }
+
+        toggleEmergency() {
+          this.emergency = !this.emergency;
+          if (this.emergency) {
+            // Activar emergencia
+            this.powerOn = false;
+            this.btnEmergency.setText('REARMAR SISTEMA');
+            this.btnEmergency.backgroundColor = '#fbbc05'; // Naranja/Amarillo
+          } else {
+            // Desactivar emergencia
+            this.btnEmergency.setText('PARADA DE EMERGENCIA');
+            this.btnEmergency.backgroundColor = '#ea4335'; // Rojo
+          }
+          this.updateSystemState();
+        }
+
+        /**
+         * Actualiza los elementos visuales de acuerdo al estado general.
+         */
+        updateSystemState() {
+          // Icono de Power principal
+          this.btnPower.setText(this.powerOn ? 'power_settings_new' : 'power_off');
+
+          // Luces normales
+          if (!this.emergency) {
+            this.mainLight.color.setHex(0xffffff);
+            this.ambientLight.intensity = this.powerOn ? 0.8 : 0.2;
+            this.mainLight.intensity = this.powerOn ? 2.0 : 0.0;
+          }
+
+          // Actualizar texto del voltaje si se cortó la energía
+          if (!this.powerOn) {
+            this.txtVolt.setText(`0 V`);
+          } else {
+            this.txtVolt.setText(`${this.voltage} V`);
+          }
+        }
+
+        /**
+         * El bucle de actualización constante (manejado por requestAnimationFrame interno).
+         */
+        update() {
+          const dt = xb.getDeltaTime();
+          this.time += dt;
+
+          // Animación de emergencia (Luz roja intermitente)
+          if (this.emergency) {
+            this.mainLight.color.setHex(0xff0000);
+            this.ambientLight.intensity = 0.1;
+            // Intermitencia
+            this.mainLight.intensity = Math.sin(this.time * 8) > 0 ? 3.0 : 0.0;
+          } else if (!this.powerOn) {
+            // Mantener estado apagado
+          } else {
+            this.mainLight.color.setHex(0xffffff);
+            
+            // Animamos la rotación del modelo si todo está encendido
+            if (this.modelViewer) {
+              // Calculamos cuántos breakers están encendidos
+              const activeBreakers = this.breakers.filter(b => b.state).length;
+              // La velocidad de rotación depende del voltaje y los breakers
+              const targetSpeed = (this.voltage / 220.0) * (activeBreakers / 4.0) * 2.0;
+              
+              this.modelViewer.rotation.y += targetSpeed * dt;
+            }
+          }
+        }
+      }
+
+      // Inicialización de la escena
+      document.addEventListener('DOMContentLoaded', function () {
+        const options = new xb.Options();
+        
+        // Habilitamos controles de UI y visualización de manos
+        options.enableUI();
+        options.enableHands();
+        
+        options.hands.enabled = true;
+        options.hands.visualization = true;
+
+        xb.add(new ElectricalPanelApp());
+        xb.init(options);
+      });
     </script>
   </body>
 </html>
