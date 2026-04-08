@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="es">
   <head>
-    <title>Pelota Optimizada XR | XR Blocks</title>
+    <title>Pelota Interactiva XR | XR Blocks</title>
     <meta charset="UTF-8" />
     <meta
       name="viewport"
@@ -32,120 +32,92 @@ import * as THREE from 'three';
 import * as xb from 'xrblocks';
 
 /**
- * Versión Mejorada y Optimizada para Meta Quest 3.
- * Usa eventos nativos de Hitbox pero con cero creación de basura en memoria para evitar bloqueos.
+ * Versión "Safe Mode" para Meta Quest 3.
+ * Evita bloqueos eliminando cálculos de física/luces pesados y usando seguimiento por lerp.
  */
 class BallExperience extends xb.Script {
   constructor() {
     super();
+    this.ball = null;
+    this.activeController = null;
     this.isGrabbing = false;
-    this.activeController = null; // Añadido para gestionar el controlador activo
-
-    // --- OPTIMIZACIÓN CRÍTICA ---
-    // Pre-asignamos todas las variables que se usan repetitivamente en el bucle
-    this._handToObject = new THREE.Matrix4();
-    this._mH = new THREE.Matrix4();
-    this._mO = new THREE.Matrix4();
-    this._mParentInv = new THREE.Matrix4();
-    this._mOlocal = new THREE.Matrix4();
-    this._pos = new THREE.Vector3();
-    this._quat = new THREE.Quaternion();
-    this._scl = new THREE.Vector3();
     
-    this.originalColor = new THREE.Color(0x00ffcc);
+    // Colores pre-definidos
+    this.colorNormal = new THREE.Color(0x00ffcc);
+    this.colorGrab = new THREE.Color(0xffff00);
+    
+    // Offset para que la pelota no tape el centro de la mano
+    this.offset = new THREE.Vector3(0, 0, -0.05);
   }
 
   init() {
-    // Iluminación
-    this.add(new THREE.HemisphereLight(0xbbbbbb, 0x888888, 3));
-    const light = new THREE.DirectionalLight(0xffffff, 2);
-    light.position.set(1, 1, 1).normalize();
-    this.add(light);
+    // Iluminación muy básica (solo para la escena, la pelota usará material básico)
+    this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1));
 
-    // Pelota
-    const geometry = new THREE.SphereGeometry(0.06, 32, 32);
-    // Usamos StandardMaterial que reacciona un poco mejor a la luz que Phong
-    const material = new THREE.MeshStandardMaterial({
-      color: this.originalColor,
-      roughness: 0.2,
-      metalness: 0.1
+    // Pelota de bajo poligonaje y material básico (sin sombras/luces) para evitar crashes
+    const geometry = new THREE.SphereGeometry(0.04, 12, 12);
+    const material = new THREE.MeshBasicMaterial({
+      color: this.colorNormal,
+      transparent: true,
+      opacity: 0.8
     });
-    this.target = new THREE.Mesh(geometry, material);
+
+    this.ball = new THREE.Mesh(geometry, material);
+    this.ball.position.set(0, 1.3, -0.5);
+    this.add(this.ball);
     
-    // Posicionar frente al usuario
-    this.target.position.set(0, 1.2, -0.4);
-    this.add(this.target);
-    
-    console.log("Acerca tu mano a la pelota y cierra el puño para agarrarla.");
+    console.log("Modo seguro activado. Intenta mover la pelota.");
   }
 
-  // --- HITBOX: Reacción al toque ---
-  onObjectTouchStart(event) {
-    this.target.material.color.setHex(0xffff00); // Amarillo cuando tu mano la atraviesa
-  }
-
-  onObjectTouchEnd(event) {
-    if (!this.isGrabbing) {
-      this.target.material.color.copy(this.originalColor); // Vuelve al turquesa original
-    }
-  }
-
-  // --- AGARRE: Usar puño cerrado (Squeeze) en lugar de pinza ---
-  onSqueezeStart(event) {
+  /**
+   * Identificamos el controlador que intenta agarrar.
+   */
+  onSelectStart(event) {
     if (this.isGrabbing) return;
-    
+
     const controller = event.target;
-    const intersections = xb.core.input.intersectObjectByController(controller, this.target);
+    if (!controller) return;
+
+    // Solo comprobamos intersección en el momento inicial del click/pinch
+    const intersections = xb.core.input.intersectObjectByController(controller, this.ball);
     
     if (intersections.length > 0) {
       this.isGrabbing = true;
       this.activeController = controller;
-      this.target.material.color.setHex(0xff0000); // Rojo mientras la sujetas con el puño
-
-      // Guardar la transformación delta inicial usando las matrices pre-asignadas
-      this.target.updateMatrixWorld(true);
-      controller.updateMatrixWorld(true);
-
-      const H0 = this._mH.copy(controller.matrixWorld);
-      const O0 = this._mO.copy(this.target.matrixWorld);
-      this._handToObject.copy(H0).invert().multiply(O0);
+      this.ball.material.color.copy(this.colorGrab);
     }
   }
 
   /**
-   * Mover el objeto de forma estable
+   * Liberamos el estado.
    */
-  onSqueezing(event) {
-    if (!this.isGrabbing || event.target !== this.activeController) return;
-
-    const controller = this.activeController;
-    controller.updateMatrixWorld(true);
-    
-    this._mH.copy(controller.matrixWorld);
-    this._mO.multiplyMatrices(this._mH, this._handToObject);
-    
-    const parent = this.target.parent;
-    if (parent) parent.updateMatrixWorld(true);
-    
-    if (parent) {
-      this._mParentInv.copy(parent.matrixWorld).invert();
-    } else {
-      this._mParentInv.identity();
-    }
-
-    this._mOlocal.multiplyMatrices(this._mParentInv, this._mO);
-    this._mOlocal.decompose(this._pos, this._quat, this._scl);
-
-    this.target.position.copy(this._pos);
-    this.target.quaternion.copy(this._quat);
-    this.target.updateMatrix();
-  }
-
-  onSqueezeEnd(event) {
+  onSelectEnd(event) {
     if (this.isGrabbing && event.target === this.activeController) {
       this.isGrabbing = false;
       this.activeController = null;
-      this.target.material.color.copy(this.originalColor);
+      this.ball.material.color.copy(this.colorNormal);
+    }
+  }
+
+  /**
+   * La lógica de movimiento ocurre aquí, de forma suave y controlada por el motor.
+   */
+  update() {
+    if (this.isGrabbing && this.activeController) {
+      // Usamos LERP (Linear Interpolation) para seguir la posición de la mano.
+      // Esto es mucho más estable que el parenting directo en Quest 3.
+      // 0.2 es el factor de suavizado.
+      this.ball.position.lerp(this.activeController.position, 0.2);
+      
+      // La rotación también se suaviza
+      this.ball.quaternion.slerp(this.activeController.quaternion, 0.1);
+    }
+
+    // Seguridad: si el controlador deja de ser visible (se pierde el tracking), soltamos.
+    if (this.isGrabbing && this.activeController && !this.activeController.visible) {
+      this.isGrabbing = false;
+      this.activeController = null;
+      this.ball.material.color.copy(this.colorNormal);
     }
   }
 }
@@ -156,12 +128,13 @@ document.addEventListener('DOMContentLoaded', async function () {
   
   options.enableHands();
   
-  // Habilitamos opciones de manos avanzadas
-  options.hands.enabled = true;
+  // Desactivamos retículas si persisten los crashes, ya que el raycasting constante puede saturar.
+  options.enableReticles(); 
+  
   options.hands.visualization = true;
   options.hands.visualizeMeshes = true;
   
-  options.setAppTitle('Hitbox Mejorada');
+  options.setAppTitle('Stable Interaction Quest 3');
 
   try {
     await xb.init(options);
@@ -170,6 +143,6 @@ document.addEventListener('DOMContentLoaded', async function () {
     console.error("Fallo al iniciar:", err);
   }
 });
-</script>
+    </script>
   </body>
 </html>
