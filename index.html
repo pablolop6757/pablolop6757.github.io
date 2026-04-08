@@ -32,19 +32,16 @@ import * as THREE from 'three';
 import * as xb from 'xrblocks';
 
 /**
- * Experiencia básica: Solo agarrar y mover. Sin físicas.
+ * Experiencia Básica: Agarrar con el puño (Grip/Squeeze) sin físicas.
  */
-class BasicBallExperience extends xb.Script {
+class BasicGrabExperience extends xb.Script {
   constructor() {
     super();
-    // Variables para gestionar el estado de agarre
     this.isGrabbing = false;
     this.activeController = null;
     
-    // Matriz para guardar la relación inicial entre la mano y la pelota
+    // Matrices pre-asignadas para garantizar la estabilidad sin bloquear las Quest 3
     this.offsetMatrix = new THREE.Matrix4();
-    
-    // Variables pre-asignadas para evitar garbage collection en el bucle
     this._pos = new THREE.Vector3();
     this._quat = new THREE.Quaternion();
     this._scale = new THREE.Vector3();
@@ -56,13 +53,13 @@ class BasicBallExperience extends xb.Script {
   }
 
   init() {
-    // 1. Iluminación
+    // 1. Iluminación ligera
     this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
     const light = new THREE.DirectionalLight(0xffffff, 1.5);
     light.position.set(1, 2, 1);
     this.add(light);
 
-    // 2. Crear la pelota
+    // 2. Crear la pelota flotante
     const geometry = new THREE.SphereGeometry(0.05, 32, 32);
     const material = new THREE.MeshPhongMaterial({
       color: this.colorNormal,
@@ -71,20 +68,20 @@ class BasicBallExperience extends xb.Script {
 
     this.ball = new THREE.Mesh(geometry, material);
     
-    // Posición inicial: frente al usuario
+    // Se queda flotando cómodamente frente a ti
     this.ball.position.set(0, 1.3, -0.5);
     this.add(this.ball);
   }
 
   /**
-   * Se ejecuta cuando el usuario hace el gesto de pinza o pulsa el gatillo.
+   * onSqueezeStart: Detecta el gesto de cerrar el puño (agarrar) o el gatillo lateral.
    */
-  onSelectStart(event) {
+  onSqueezeStart(event) {
     if (this.isGrabbing) return;
 
     const controller = event.target;
     
-    // Comprobar si estamos tocando la pelota
+    // Comprobar si la mano está tocando la pelota
     const intersections = xb.core.input.intersectObjectByController(controller, this.ball);
     
     if (intersections.length > 0) {
@@ -92,7 +89,7 @@ class BasicBallExperience extends xb.Script {
       this.activeController = controller;
       this.ball.material.color.setHex(this.colorGrab);
 
-      // Calcular la posición relativa inicial
+      // Calcular la posición relativa inicial (fija el offset para que no salte)
       this.ball.updateMatrixWorld(true);
       controller.updateMatrixWorld(true);
       
@@ -102,14 +99,14 @@ class BasicBallExperience extends xb.Script {
   }
 
   /**
-   * Se ejecuta mientras se mantiene el agarre.
+   * onSqueezing: Mueve la pelota mientras mantienes el puño cerrado.
    */
-  onSelecting(event) {
+  onSqueezing(event) {
     if (!this.isGrabbing || event.target !== this.activeController) return;
 
     const controller = this.activeController;
     
-    // Mover la pelota manteniendo la posición relativa
+    // Aplicar movimiento de manera estable
     const newWorldMatrix = this._tempMatrix.multiplyMatrices(controller.matrixWorld, this.offsetMatrix);
     newWorldMatrix.decompose(this._pos, this._quat, this._scale);
 
@@ -118,9 +115,9 @@ class BasicBallExperience extends xb.Script {
   }
 
   /**
-   * Se ejecuta al soltar la pelota.
+   * onSqueezeEnd: Suelta la pelota al abrir la mano.
    */
-  onSelectEnd(event) {
+  onSqueezeEnd(event) {
     if (this.isGrabbing && event.target === this.activeController) {
       this.isGrabbing = false;
       this.activeController = null;
@@ -140,17 +137,12 @@ document.addEventListener('DOMContentLoaded', async function () {
   options.hands.visualization = true;
   options.hands.visualizeMeshes = true;
   
-  options.setAppTitle('Pelota Básica');
-
-  // xrButton configurado por defecto permite entrar y salir de XR
-  // options.xrButton.startText = 'ENTRAR';
-  // options.xrButton.endText = 'SALIR';
+  options.setAppTitle('Agarrar Pelota');
 
   try {
-    // Al usar xb.init(), XR Blocks se encarga de crear el botón estándar 
-    // en la parte inferior de la pantalla para entrar y salir.
+    // Al iniciar, XR Blocks se encarga automáticamente del botón "Enter XR" / "Exit XR"
     await xb.init(options);
-    xb.add(new BasicBallExperience());
+    xb.add(new BasicGrabExperience());
   } catch (err) {
     console.error("Fallo al iniciar:", err);
   }
