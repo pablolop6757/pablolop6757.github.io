@@ -34,7 +34,7 @@ import * as xb from 'xrblocks';
 import RAPIER from '@dimforge/rapier3d-simd-compat';
 
 /**
- * Versión Definitiva con Físicas y Colisiones Reales.
+ * Versión Definitiva con Físicas, Prevención de Pérdida y UI.
  */
 class BallExperience extends xb.Script {
   init() {
@@ -47,70 +47,113 @@ class BallExperience extends xb.Script {
     light.position.set(1, 1, 1).normalize();
     this.add(light);
 
-    // --- NUEVO: Cartel Explicativo ---
+    // --- CARTEL INDEPENDIENTE CON BOTONES ---
     const panel = new xb.SpatialPanel({
-      width: 0.8,
-      height: 0.35,
+      width: 1.2,
+      height: 0.6,
       backgroundColor: '#1a1a1acc' // Fondo oscuro semitransparente
     });
-    // Posicionamos el cartel un poco más arriba y atrás de la pelota
-    panel.position.set(0, 1.6, -0.8);
+    // Posicionamos el cartel más lejos y alto para que no estorbe
+    panel.position.set(0, 1.8, -1.2);
     this.add(panel);
 
     const grid = panel.addGrid();
-    grid.addRow({weight: 0.4}).addText({
+    grid.addRow({weight: 0.2}).addText({
       text: 'Pelota de Gravedad XR',
       fontSize: 0.08,
       fontColor: '#00ffcc'
     });
-    grid.addRow({weight: 0.6}).addText({
-      text: 'Usa el gesto de pinza para agarrar la pelota.\nAl soltarla, ¡rebotará contra tu habitación real!',
+    grid.addRow({weight: 0.4}).addText({
+      text: '1. Usa el gesto de pinza para agarrar la pelota.\n2. Al soltarla, ¡rebotará contra tu habitación real!\n3. Si se cae o la pierdes, pulsa Reiniciar.',
       fontSize: 0.05,
       fontColor: '#ffffff'
     });
 
-    // Pelota Visual
+    // Añadir botón de reinicio
+    const btnRow = grid.addRow({weight: 0.2});
+    const resetBtn = btnRow.addCol({weight: 0.5}).addTextButton({
+      text: 'Reiniciar Pelota',
+      fontSize: 0.06,
+      backgroundColor: '#ff3366',
+      fontColor: '#ffffff'
+    });
+    resetBtn.onTriggered = () => this.resetBall();
+
+    // Añadir botón para SALIR de la experiencia de forma segura
+    const orbiter = grid.addOrbiter();
+    orbiter.addExitButton();
+    
+    panel.updateLayouts();
+
+    // --- PELOTA VISUAL ---
     this.originalColor = new THREE.Color(0x00ffcc);
     const geometry = new THREE.SphereGeometry(0.06, 32, 32);
     const material = new THREE.MeshPhongMaterial({color: this.originalColor});
     this.target = new THREE.Mesh(geometry, material);
     
-    // Posición de aparición (flotando cómodamente frente a ti)
+    // Posición inicial de aparición (flotando cómodamente frente a ti)
     this.target.position.set(0, 1.3, -0.5);
     this.add(this.target);
-    
-    console.log("¡Pelota física y cartel creados!");
   }
 
   /**
-   * Este método es llamado automáticamente por XR Blocks cuando el motor de físicas está listo.
+   * Inicialización del motor de físicas (Rapier3D).
    */
   initPhysics(physics) {
     this.RAPIER = physics.RAPIER;
     this.blendedWorld = physics.blendedWorld;
 
-    // 1. MODIFICADO: Inicia como Kinematic para que se quede flotando, desafiando la gravedad, hasta que la agarres.
+    // Inicia como Kinematic para que se quede flotando hasta que la agarres.
     const desc = this.RAPIER.RigidBodyDesc.kinematicPositionBased()
       .setTranslation(this.target.position.x, this.target.position.y, this.target.position.z);
     
     this.body = this.blendedWorld.createRigidBody(desc);
     
-    // 2. Crear el colisionador con forma de esfera y asignarle "rebote" (restitution)
+    // Colisionador de esfera con rebote
     const shape = this.RAPIER.ColliderDesc.ball(0.06)
         .setRestitution(0.8) // 80% de rebote
-        .setFriction(0.4);   // Fricción media
+        .setFriction(0.4);
         
     this.collider = this.blendedWorld.createCollider(shape, this.body);
   }
 
   /**
-   * Sincronizamos la malla 3D con el motor de físicas en cada fotograma.
+   * Sincroniza la malla visual con la física en cada frame y previene que la pelota caiga al vacío.
    */
   update() {
     if (!this.isGrabbing && this.body) {
-      // Si no la estamos sujetando, la pelota sigue las leyes de la física
+      // Sincronizar posición y rotación
       this.target.position.copy(this.body.translation());
       this.target.quaternion.copy(this.body.rotation());
+
+      // PREVENCIÓN: Si la pelota cae por debajo del suelo (ej. a -3 metros), se reinicia sola.
+      if (this.target.position.y < -3.0) {
+        this.resetBall();
+      }
+    }
+  }
+
+  /**
+   * Devuelve la pelota a su punto de origen flotante.
+   */
+  resetBall() {
+    this.isGrabbing = false;
+    this._handToObject = null;
+    
+    // Restaurar visuales
+    this.target.position.set(0, 1.3, -0.5);
+    this.target.quaternion.identity();
+    this.target.material.color.copy(this.originalColor);
+
+    // Restaurar el cuerpo físico
+    if (this.body) {
+      this.body.setTranslation(this.target.position, true);
+      this.body.setRotation(this.target.quaternion, true);
+      this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+      this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+      
+      // Volver a estado "flotante" (Kinematic)
+      this.body.setBodyType(this.RAPIER.RigidBodyType.KinematicPositionBased, true);
     }
   }
 
@@ -131,7 +174,6 @@ class BallExperience extends xb.Script {
     this.isGrabbing = true;
     this.target.material.color.setHex(0xff0000); 
 
-    // Al agarrarla, la convertimos en un objeto "Kinematic" (ignorará la gravedad mientras la sujetamos)
     if (this.body) {
       this.body.setBodyType(this.RAPIER.RigidBodyType.KinematicPositionBased, true);
     }
@@ -163,12 +205,10 @@ class BallExperience extends xb.Script {
     const scl = new THREE.Vector3();
     Olocal.decompose(pos, quat, scl);
 
-    // Actualizar malla visual
     this.target.position.copy(pos);
     this.target.quaternion.copy(quat);
     this.target.updateMatrix();
 
-    // Actualizar cuerpo físico (para que detecte con qué chocamos al mover la mano)
     if (this.body) {
       this.body.setNextKinematicTranslation(pos);
       this.body.setNextKinematicRotation(quat);
@@ -181,11 +221,9 @@ class BallExperience extends xb.Script {
     this._handToObject = null;
     this.target.material.color.copy(this.originalColor);
 
-    // Al soltarla, vuelve a ser Dinámica. 
-    // ¡Rapier mantendrá la inercia del movimiento de tu mano y podrás lanzarla!
     if (this.body) {
       this.body.setBodyType(this.RAPIER.RigidBodyType.Dynamic, true);
-      this.body.wakeUp(); // Despertar a la física por si acaso
+      this.body.wakeUp();
     }
   }
 }
@@ -194,19 +232,20 @@ class BallExperience extends xb.Script {
 document.addEventListener('DOMContentLoaded', async function () {
   const options = new xb.Options();
   
+  // Activar UI para que los botones funcionen
+  options.enableUI();
   options.enableHands();
   options.hands.enabled = true;
   options.hands.visualization = true;
   options.hands.visualizeMeshes = true;
   
-  // --- CONFIGURACIÓN CLAVE PARA FÍSICAS MUNDIALES ---
-  options.physics.RAPIER = RAPIER; // Inyectar el motor de físicas
+  options.physics.RAPIER = RAPIER; 
   
-  // Activar la creación de colisionadores basados en la geometría real de tu habitación (Depth Mesh)
+  // Frecuencia de la malla de colisiones (Depth API)
   options.depth = new xb.DepthOptions(xb.xrDepthMeshPhysicsOptions);
-  options.depth.depthMesh.colliderUpdateFps = 5; // Frecuencia de actualización de los muebles/suelo reales
+  options.depth.depthMesh.colliderUpdateFps = 5; 
   
-  options.setAppTitle('Pelota con Físicas');
+  options.setAppTitle('Pelota Completa XR');
 
   try {
     await xb.init(options);
