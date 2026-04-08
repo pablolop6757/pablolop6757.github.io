@@ -47,17 +47,39 @@ class BallExperience extends xb.Script {
     light.position.set(1, 1, 1).normalize();
     this.add(light);
 
+    // --- NUEVO: Cartel Explicativo ---
+    const panel = new xb.SpatialPanel({
+      width: 0.8,
+      height: 0.35,
+      backgroundColor: '#1a1a1acc' // Fondo oscuro semitransparente
+    });
+    // Posicionamos el cartel un poco más arriba y atrás de la pelota
+    panel.position.set(0, 1.6, -0.8);
+    this.add(panel);
+
+    const grid = panel.addGrid();
+    grid.addRow({weight: 0.4}).addText({
+      text: 'Pelota de Gravedad XR',
+      fontSize: 0.08,
+      fontColor: '#00ffcc'
+    });
+    grid.addRow({weight: 0.6}).addText({
+      text: 'Usa el gesto de pinza para agarrar la pelota.\nAl soltarla, ¡rebotará contra tu habitación real!',
+      fontSize: 0.05,
+      fontColor: '#ffffff'
+    });
+
     // Pelota Visual
     this.originalColor = new THREE.Color(0x00ffcc);
     const geometry = new THREE.SphereGeometry(0.06, 32, 32);
     const material = new THREE.MeshPhongMaterial({color: this.originalColor});
     this.target = new THREE.Mesh(geometry, material);
     
-    // Posición de aparición (caerá por gravedad)
-    this.target.position.set(0, 1.5, -0.4);
+    // Posición de aparición (flotando cómodamente frente a ti)
+    this.target.position.set(0, 1.3, -0.5);
     this.add(this.target);
     
-    console.log("¡Pelota física creada! Atrápala o déjala caer.");
+    console.log("¡Pelota física y cartel creados!");
   }
 
   /**
@@ -67,8 +89,8 @@ class BallExperience extends xb.Script {
     this.RAPIER = physics.RAPIER;
     this.blendedWorld = physics.blendedWorld;
 
-    // 1. Crear el cuerpo rígido (Dinámico por defecto para que la gravedad le afecte)
-    const desc = this.RAPIER.RigidBodyDesc.dynamic()
+    // 1. MODIFICADO: Inicia como Kinematic para que se quede flotando, desafiando la gravedad, hasta que la agarres.
+    const desc = this.RAPIER.RigidBodyDesc.kinematicPositionBased()
       .setTranslation(this.target.position.x, this.target.position.y, this.target.position.z);
     
     this.body = this.blendedWorld.createRigidBody(desc);
