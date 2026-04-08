@@ -54,8 +54,10 @@ class MaintenanceApp extends xb.Script {
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
 
-    // Altura base y profundidad de la puerta del panel
-    const h = 1.4; // Centro del armario
+    // ALTURA CORREGIDA: Bajamos el centro del armario a 1.0 metros (altura pecho/cintura)
+    // Esto asegura que todo el panel quede perfectamente al alcance de las manos.
+    this.h = 1.0; 
+    const h = this.h;
     const z = -0.8; // Profundidad (sobresaliendo un poco para fácil toque con las manos)
 
     this.steps = [
@@ -150,7 +152,8 @@ class MaintenanceApp extends xb.Script {
     this.uiPanel.draggable = true;
     this.uiPanel.isRoot = true;
 
-    this.uiPanel.position.set(-0.7, xb.core.user.height, -0.9);
+    // Ajustamos también la altura del panel flotante para que esté a mano
+    this.uiPanel.position.set(-0.7, this.h + 0.2, -0.9);
     this.uiPanel.rotation.set(0, Math.PI / 6, 0); 
     this.add(this.uiPanel);
 
@@ -214,9 +217,11 @@ class MaintenanceApp extends xb.Script {
       
       this.panelModel.scale.set(scale, scale, scale);
 
+      // COLOCACIÓN DEL PANEL: Ahora usamos this.h para que coincida exactamente
+      // con la altura central que definimos para los cubos azules.
       this.panelModel.position.set(
         -center.x * scale,
-        (-center.y * scale) + xb.core.user.height - 0.2, 
+        (-center.y * scale) + this.h, 
         (-center.z * scale) - 1.0 
       );
       
@@ -229,7 +234,7 @@ class MaintenanceApp extends xb.Script {
   }
 
   createInteractionMarker() {
-    // CUBO MÁS GRANDE: 12 cm en lugar de 8 cm, para que sea súper fácil de acertar
+    // Cubo de 12 cm, fácil de tocar
     const geometry = new THREE.BoxGeometry(0.12, 0.12, 0.12); 
     
     this.markerMaterial = new THREE.MeshBasicMaterial({
@@ -242,7 +247,7 @@ class MaintenanceApp extends xb.Script {
     
     const edges = new THREE.EdgesGeometry(geometry);
     const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 }));
-    line.raycast = () => {}; // Ignoramos las líneas en los cálculos de rayo láser para mejorar rendimiento
+    line.raycast = () => {}; 
     
     this.marker.add(line);
     this.marker.visible = false;
@@ -327,7 +332,6 @@ class MaintenanceApp extends xb.Script {
   // MÉTODO 3: Toque nativo con Colisiones de XR Blocks
   onObjectTouchStart(event) {
     if (!this.isWaitingForInteraction || !this.marker.visible || this.isTransitioning) return;
-    // Si hay un impacto físico directo, activamos
     this.triggerSuccess();
   }
 
@@ -345,7 +349,6 @@ class MaintenanceApp extends xb.Script {
       // Si estamos esperando un toque...
       if (!this.isTransitioning && this.isWaitingForInteraction) {
         
-        // Obtenemos la posición exacta del cubo en el mundo
         const markerPos = new THREE.Vector3();
         this.marker.getWorldPosition(markerPos);
 
@@ -366,14 +369,12 @@ class MaintenanceApp extends xb.Script {
             if (hand && hand.joints && hand.joints['index-finger-tip']) {
               const tip = hand.joints['index-finger-tip'].position;
               if (tip) {
-                // Cálculo matemático de distancia 3D para evitar usar funciones complejas que saturen la memoria
                 const dist = Math.sqrt(
                   Math.pow(tip.x - markerPos.x, 2) +
                   Math.pow(tip.y - markerPos.y, 2) +
                   Math.pow(tip.z - markerPos.z, 2)
                 );
                 
-                // Si la punta de tu dedo índice está a 15cm o menos, ¡activación automática!
                 if (dist < 0.15) {
                   this.triggerSuccess();
                   return;
