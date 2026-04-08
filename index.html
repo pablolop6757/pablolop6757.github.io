@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="es">
   <head>
-    <title>Pelota Física XR | XR Blocks</title>
+    <title>Pelota Básica XR | XR Blocks</title>
     <meta charset="UTF-8" />
     <meta
       name="viewport"
@@ -14,7 +14,6 @@
     <script type="importmap">
       {
         "imports": {
-          "@dimforge/rapier3d-simd-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-simd-compat@0.19.2/rapier.mjs",
           "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
           "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
           "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
@@ -31,229 +30,131 @@
 import 'xrblocks/addons/simulator/SimulatorAddons.js';
 import * as THREE from 'three';
 import * as xb from 'xrblocks';
-import RAPIER from '@dimforge/rapier3d-simd-compat';
 
 /**
- * Versión Definitiva con Físicas, Prevención de Pérdida y UI.
+ * Experiencia básica: Solo agarrar y mover. Sin físicas.
  */
-class BallExperience extends xb.Script {
-  init() {
+class BasicBallExperience extends xb.Script {
+  constructor() {
+    super();
+    // Variables para gestionar el estado de agarre
     this.isGrabbing = false;
-    this._handToObject = null;
+    this.activeController = null;
+    
+    // Matriz para guardar la relación inicial entre la mano y la pelota
+    this.offsetMatrix = new THREE.Matrix4();
+    
+    // Variables pre-asignadas para evitar garbage collection en el bucle
+    this._pos = new THREE.Vector3();
+    this._quat = new THREE.Quaternion();
+    this._scale = new THREE.Vector3();
+    this._tempMatrix = new THREE.Matrix4();
 
-    // Iluminación
-    this.add(new THREE.HemisphereLight(0xbbbbbb, 0x888888, 3));
-    const light = new THREE.DirectionalLight(0xffffff, 2);
-    light.position.set(1, 1, 1).normalize();
+    // Colores
+    this.colorNormal = 0x00ffcc; // Turquesa
+    this.colorGrab = 0xffff00;   // Amarillo
+  }
+
+  init() {
+    // 1. Iluminación
+    this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+    const light = new THREE.DirectionalLight(0xffffff, 1.5);
+    light.position.set(1, 2, 1);
     this.add(light);
 
-    // --- CARTEL INDEPENDIENTE CON BOTONES ---
-    const panel = new xb.SpatialPanel({
-      width: 1.2,
-      height: 0.6,
-      backgroundColor: '#1a1a1acc' // Fondo oscuro semitransparente
-    });
-    // Posicionamos el cartel más lejos y alto para que no estorbe
-    panel.position.set(0, 1.8, -1.2);
-    this.add(panel);
-
-    const grid = panel.addGrid();
-    grid.addRow({weight: 0.2}).addText({
-      text: 'Pelota de Gravedad XR',
-      fontSize: 0.08,
-      fontColor: '#00ffcc'
-    });
-    grid.addRow({weight: 0.4}).addText({
-      text: '1. Usa el gesto de pinza para agarrar la pelota.\n2. Al soltarla, ¡rebotará contra tu habitación real!\n3. Si se cae o la pierdes, pulsa Reiniciar.',
-      fontSize: 0.05,
-      fontColor: '#ffffff'
+    // 2. Crear la pelota
+    const geometry = new THREE.SphereGeometry(0.05, 32, 32);
+    const material = new THREE.MeshPhongMaterial({
+      color: this.colorNormal,
+      shininess: 60
     });
 
-    // Añadir botón de reinicio
-    const btnRow = grid.addRow({weight: 0.2});
-    const resetBtn = btnRow.addCol({weight: 0.5}).addTextButton({
-      text: 'Reiniciar Pelota',
-      fontSize: 0.06,
-      backgroundColor: '#ff3366',
-      fontColor: '#ffffff'
-    });
-    resetBtn.onTriggered = () => this.resetBall();
-
-    // Añadir botón para SALIR de la experiencia de forma segura
-    const orbiter = grid.addOrbiter();
-    orbiter.addExitButton();
+    this.ball = new THREE.Mesh(geometry, material);
     
-    panel.updateLayouts();
-
-    // --- PELOTA VISUAL ---
-    this.originalColor = new THREE.Color(0x00ffcc);
-    const geometry = new THREE.SphereGeometry(0.06, 32, 32);
-    const material = new THREE.MeshPhongMaterial({color: this.originalColor});
-    this.target = new THREE.Mesh(geometry, material);
-    
-    // Posición inicial de aparición (flotando cómodamente frente a ti)
-    this.target.position.set(0, 1.3, -0.5);
-    this.add(this.target);
+    // Posición inicial: frente al usuario
+    this.ball.position.set(0, 1.3, -0.5);
+    this.add(this.ball);
   }
 
   /**
-   * Inicialización del motor de físicas (Rapier3D).
+   * Se ejecuta cuando el usuario hace el gesto de pinza o pulsa el gatillo.
    */
-  initPhysics(physics) {
-    this.RAPIER = physics.RAPIER;
-    this.blendedWorld = physics.blendedWorld;
-
-    // Inicia como Kinematic para que se quede flotando hasta que la agarres.
-    const desc = this.RAPIER.RigidBodyDesc.kinematicPositionBased()
-      .setTranslation(this.target.position.x, this.target.position.y, this.target.position.z);
-    
-    this.body = this.blendedWorld.createRigidBody(desc);
-    
-    // Colisionador de esfera con rebote
-    const shape = this.RAPIER.ColliderDesc.ball(0.06)
-        .setRestitution(0.8) // 80% de rebote
-        .setFriction(0.4);
-        
-    this.collider = this.blendedWorld.createCollider(shape, this.body);
-  }
-
-  /**
-   * Sincroniza la malla visual con la física en cada frame y previene que la pelota caiga al vacío.
-   */
-  update() {
-    if (!this.isGrabbing && this.body) {
-      // Sincronizar posición y rotación
-      this.target.position.copy(this.body.translation());
-      this.target.quaternion.copy(this.body.rotation());
-
-      // PREVENCIÓN: Si la pelota cae por debajo del suelo (ej. a -3 metros), se reinicia sola.
-      if (this.target.position.y < -3.0) {
-        this.resetBall();
-      }
-    }
-  }
-
-  /**
-   * Devuelve la pelota a su punto de origen flotante.
-   */
-  resetBall() {
-    this.isGrabbing = false;
-    this._handToObject = null;
-    
-    // Restaurar visuales
-    this.target.position.set(0, 1.3, -0.5);
-    this.target.quaternion.identity();
-    this.target.material.color.copy(this.originalColor);
-
-    // Restaurar el cuerpo físico
-    if (this.body) {
-      this.body.setTranslation(this.target.position, true);
-      this.body.setRotation(this.target.quaternion, true);
-      this.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-      this.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-      
-      // Volver a estado "flotante" (Kinematic)
-      this.body.setBodyType(this.RAPIER.RigidBodyType.KinematicPositionBased, true);
-    }
-  }
-
-  // --- REACCIÓN AL TOQUE ---
-  onObjectTouchStart(event) {
-    this.target.material.color.setHex(0xffff00);
-  }
-
-  onObjectTouchEnd(event) {
-    if (!this.isGrabbing) {
-      this.target.material.color.copy(this.originalColor);
-    }
-  }
-
-  // --- REACCIÓN AL AGARRE (Pinza) ---
-  onObjectGrabStart(event) {
+  onSelectStart(event) {
     if (this.isGrabbing) return;
-    this.isGrabbing = true;
-    this.target.material.color.setHex(0xff0000); 
 
-    if (this.body) {
-      this.body.setBodyType(this.RAPIER.RigidBodyType.KinematicPositionBased, true);
-    }
-
-    this.target.updateMatrixWorld(true);
-    event.hand.updateMatrixWorld(true);
-
-    const H0 = new THREE.Matrix4().copy(event.hand.matrixWorld);
-    const O0 = new THREE.Matrix4().copy(this.target.matrixWorld);
-    this._handToObject = new THREE.Matrix4().copy(H0).invert().multiply(O0);
-  }
-
-  onObjectGrabbing(event) {
-    if (!this.isGrabbing || !this._handToObject) return;
-
-    event.hand.updateMatrixWorld(true);
-    const H = new THREE.Matrix4().copy(event.hand.matrixWorld);
-    const O = new THREE.Matrix4().multiplyMatrices(H, this._handToObject);
+    const controller = event.target;
     
-    const parent = this.target.parent;
-    if (parent) parent.updateMatrixWorld(true);
-    const parentInv = parent
-      ? new THREE.Matrix4().copy(parent.matrixWorld).invert()
-      : new THREE.Matrix4().identity();
+    // Comprobar si estamos tocando la pelota
+    const intersections = xb.core.input.intersectObjectByController(controller, this.ball);
+    
+    if (intersections.length > 0) {
+      this.isGrabbing = true;
+      this.activeController = controller;
+      this.ball.material.color.setHex(this.colorGrab);
 
-    const Olocal = new THREE.Matrix4().multiplyMatrices(parentInv, O);
-    const pos = new THREE.Vector3();
-    const quat = new THREE.Quaternion();
-    const scl = new THREE.Vector3();
-    Olocal.decompose(pos, quat, scl);
-
-    this.target.position.copy(pos);
-    this.target.quaternion.copy(quat);
-    this.target.updateMatrix();
-
-    if (this.body) {
-      this.body.setNextKinematicTranslation(pos);
-      this.body.setNextKinematicRotation(quat);
+      // Calcular la posición relativa inicial
+      this.ball.updateMatrixWorld(true);
+      controller.updateMatrixWorld(true);
+      
+      const invControllerMatrix = this._tempMatrix.copy(controller.matrixWorld).invert();
+      this.offsetMatrix.multiplyMatrices(invControllerMatrix, this.ball.matrixWorld);
     }
   }
 
-  onObjectGrabEnd(event) {
-    if (!this.isGrabbing) return;
-    this.isGrabbing = false;
-    this._handToObject = null;
-    this.target.material.color.copy(this.originalColor);
+  /**
+   * Se ejecuta mientras se mantiene el agarre.
+   */
+  onSelecting(event) {
+    if (!this.isGrabbing || event.target !== this.activeController) return;
 
-    if (this.body) {
-      this.body.setBodyType(this.RAPIER.RigidBodyType.Dynamic, true);
-      this.body.wakeUp();
+    const controller = this.activeController;
+    
+    // Mover la pelota manteniendo la posición relativa
+    const newWorldMatrix = this._tempMatrix.multiplyMatrices(controller.matrixWorld, this.offsetMatrix);
+    newWorldMatrix.decompose(this._pos, this._quat, this._scale);
+
+    this.ball.position.copy(this._pos);
+    this.ball.quaternion.copy(this._quat);
+  }
+
+  /**
+   * Se ejecuta al soltar la pelota.
+   */
+  onSelectEnd(event) {
+    if (this.isGrabbing && event.target === this.activeController) {
+      this.isGrabbing = false;
+      this.activeController = null;
+      this.ball.material.color.setHex(this.colorNormal);
     }
   }
 }
 
-// Configuración de entrada
+// Configuración de inicio
 document.addEventListener('DOMContentLoaded', async function () {
   const options = new xb.Options();
   
-  // Activar UI para que los botones funcionen
-  options.enableUI();
+  // Activar manos y retículas
   options.enableHands();
-  options.hands.enabled = true;
+  options.enableReticles();
+  
   options.hands.visualization = true;
   options.hands.visualizeMeshes = true;
   
-  options.physics.RAPIER = RAPIER; 
-  
-  // Frecuencia de la malla de colisiones (Depth API)
-  options.depth = new xb.DepthOptions(xb.xrDepthMeshPhysicsOptions);
-  options.depth.depthMesh.colliderUpdateFps = 5; 
-  
-  options.setAppTitle('Pelota Completa XR');
+  options.setAppTitle('Pelota Básica');
+
+  // xrButton configurado por defecto permite entrar y salir de XR
+  // options.xrButton.startText = 'ENTRAR';
+  // options.xrButton.endText = 'SALIR';
 
   try {
+    // Al usar xb.init(), XR Blocks se encarga de crear el botón estándar 
+    // en la parte inferior de la pantalla para entrar y salir.
     await xb.init(options);
-    xb.add(new BallExperience());
+    xb.add(new BasicBallExperience());
   } catch (err) {
     console.error("Fallo al iniciar:", err);
   }
 });
-</script>
+    </script>
   </body>
 </html>
