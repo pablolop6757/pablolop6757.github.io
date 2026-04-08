@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="es">
   <head>
-    <title>Pelota Básica XR | XR Blocks</title>
+    <title>Pelota Interactiva XR | XR Blocks</title>
     <meta charset="UTF-8" />
     <meta
       name="viewport"
@@ -32,121 +32,112 @@ import * as THREE from 'three';
 import * as xb from 'xrblocks';
 
 /**
- * Experiencia Básica: Agarrar con el puño (Grip/Squeeze) sin físicas.
+ * Versión Oficial de Agarre para Meta Quest 3.
+ * Usa los eventos nativos de Touch y Grab para interacciones perfectas.
  */
-class BasicGrabExperience extends xb.Script {
-  constructor() {
-    super();
-    this.isGrabbing = false;
-    this.activeController = null;
-    
-    // Matrices pre-asignadas para garantizar la estabilidad sin bloquear las Quest 3
-    this.offsetMatrix = new THREE.Matrix4();
-    this._pos = new THREE.Vector3();
-    this._quat = new THREE.Quaternion();
-    this._scale = new THREE.Vector3();
-    this._tempMatrix = new THREE.Matrix4();
-
-    // Colores
-    this.colorNormal = 0x00ffcc; // Turquesa
-    this.colorGrab = 0xffff00;   // Amarillo
-  }
-
+class BallExperience extends xb.Script {
   init() {
-    // 1. Iluminación ligera
-    this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
-    const light = new THREE.DirectionalLight(0xffffff, 1.5);
-    light.position.set(1, 2, 1);
+    this.isGrabbing = false;
+    this._handToObject = null;
+
+    // Iluminación
+    this.add(new THREE.HemisphereLight(0xbbbbbb, 0x888888, 3));
+    const light = new THREE.DirectionalLight(0xffffff, 2);
+    light.position.set(1, 1, 1).normalize();
     this.add(light);
 
-    // 2. Crear la pelota flotante
-    const geometry = new THREE.SphereGeometry(0.05, 32, 32);
-    const material = new THREE.MeshPhongMaterial({
-      color: this.colorNormal,
-      shininess: 60
-    });
-
-    this.ball = new THREE.Mesh(geometry, material);
+    // Pelota
+    this.originalColor = new THREE.Color(0x00ffcc);
+    const geometry = new THREE.SphereGeometry(0.06, 32, 32);
+    const material = new THREE.MeshPhongMaterial({color: this.originalColor});
+    this.target = new THREE.Mesh(geometry, material);
     
-    // Se queda flotando cómodamente frente a ti
-    this.ball.position.set(0, 1.3, -0.5);
-    this.add(this.ball);
+    // Posicionar frente al usuario
+    this.target.position.set(0, 1.2, -0.4);
+    this.add(this.target);
+    
+    console.log("Acerca tu mano a la pelota para tocarla o agarrarla.");
   }
 
-  /**
-   * onSqueezeStart: Detecta el gesto de cerrar el puño (agarrar) o el gatillo lateral.
-   */
-  onSqueezeStart(event) {
+  // --- HITBOX: Reacción al toque ---
+  onObjectTouchStart(event) {
+    this.target.material.color.setHex(0xffff00); // Amarillo cuando tu mano la atraviesa/toca
+  }
+
+  onObjectTouchEnd(event) {
+    if (!this.isGrabbing) {
+      this.target.material.color.copy(this.originalColor); // Vuelve al color original
+    }
+  }
+
+  // --- HITBOX: Reacción al agarre (Pinza) ---
+  onObjectGrabStart(event) {
     if (this.isGrabbing) return;
+    this.isGrabbing = true;
+    this.target.material.color.setHex(0xff0000); // Rojo mientras la sujetas
 
-    const controller = event.target;
-    
-    // Comprobar si la mano está tocando la pelota
-    const intersections = xb.core.input.intersectObjectByController(controller, this.ball);
-    
-    if (intersections.length > 0) {
-      this.isGrabbing = true;
-      this.activeController = controller;
-      this.ball.material.color.setHex(this.colorGrab);
+    // Guardar la transformación delta inicial mano-objeto
+    this.target.updateMatrixWorld(true);
+    event.hand.updateMatrixWorld(true);
 
-      // Calcular la posición relativa inicial (fija el offset para que no salte)
-      this.ball.updateMatrixWorld(true);
-      controller.updateMatrixWorld(true);
-      
-      const invControllerMatrix = this._tempMatrix.copy(controller.matrixWorld).invert();
-      this.offsetMatrix.multiplyMatrices(invControllerMatrix, this.ball.matrixWorld);
-    }
+    const H0 = new THREE.Matrix4().copy(event.hand.matrixWorld);
+    const O0 = new THREE.Matrix4().copy(this.target.matrixWorld);
+    this._handToObject = new THREE.Matrix4().copy(H0).invert().multiply(O0);
   }
 
-  /**
-   * onSqueezing: Mueve la pelota mientras mantienes el puño cerrado.
-   */
-  onSqueezing(event) {
-    if (!this.isGrabbing || event.target !== this.activeController) return;
+  onObjectGrabbing(event) {
+    if (!this.isGrabbing || !this._handToObject) return;
 
-    const controller = this.activeController;
+    // Mover el objeto en base a la posición de la mano
+    event.hand.updateMatrixWorld(true);
+    const H = new THREE.Matrix4().copy(event.hand.matrixWorld);
+    const O = new THREE.Matrix4().multiplyMatrices(H, this._handToObject);
     
-    // Aplicar movimiento de manera estable
-    const newWorldMatrix = this._tempMatrix.multiplyMatrices(controller.matrixWorld, this.offsetMatrix);
-    newWorldMatrix.decompose(this._pos, this._quat, this._scale);
+    const parent = this.target.parent;
+    if (parent) parent.updateMatrixWorld(true);
+    const parentInv = parent
+      ? new THREE.Matrix4().copy(parent.matrixWorld).invert()
+      : new THREE.Matrix4().identity();
 
-    this.ball.position.copy(this._pos);
-    this.ball.quaternion.copy(this._quat);
+    const Olocal = new THREE.Matrix4().multiplyMatrices(parentInv, O);
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    Olocal.decompose(pos, quat, scl);
+
+    this.target.position.copy(pos);
+    this.target.quaternion.copy(quat);
+    this.target.updateMatrix();
   }
 
-  /**
-   * onSqueezeEnd: Suelta la pelota al abrir la mano.
-   */
-  onSqueezeEnd(event) {
-    if (this.isGrabbing && event.target === this.activeController) {
-      this.isGrabbing = false;
-      this.activeController = null;
-      this.ball.material.color.setHex(this.colorNormal);
-    }
+  onObjectGrabEnd(event) {
+    if (!this.isGrabbing) return;
+    this.isGrabbing = false;
+    this._handToObject = null;
+    this.target.material.color.copy(this.originalColor);
   }
 }
 
-// Configuración de inicio
+// Configuración de entrada
 document.addEventListener('DOMContentLoaded', async function () {
   const options = new xb.Options();
   
-  // Activar manos y retículas
   options.enableHands();
-  options.enableReticles();
   
+  // Habilitamos opciones de manos avanzadas
+  options.hands.enabled = true;
   options.hands.visualization = true;
   options.hands.visualizeMeshes = true;
   
-  options.setAppTitle('Agarrar Pelota');
+  options.setAppTitle('Hitbox y Agarre Nativo');
 
   try {
-    // Al iniciar, XR Blocks se encarga automáticamente del botón "Enter XR" / "Exit XR"
     await xb.init(options);
-    xb.add(new BasicGrabExperience());
+    xb.add(new BallExperience());
   } catch (err) {
     console.error("Fallo al iniciar:", err);
   }
 });
-    </script>
+</script>
   </body>
 </html>
