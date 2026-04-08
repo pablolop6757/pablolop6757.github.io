@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="es">
   <head>
-    <title>Pelota Interactiva XR | XR Blocks</title>
+    <title>Pelota Optimizada XR | XR Blocks</title>
     <meta charset="UTF-8" />
     <meta
       name="viewport"
@@ -32,14 +32,30 @@ import * as THREE from 'three';
 import * as xb from 'xrblocks';
 
 /**
- * Versión Oficial de Agarre para Meta Quest 3.
- * Usa los eventos nativos de Touch y Grab para interacciones perfectas.
+ * Versión Mejorada y Optimizada para Meta Quest 3.
+ * Usa eventos nativos de Hitbox pero con cero creación de basura en memoria para evitar bloqueos.
  */
 class BallExperience extends xb.Script {
-  init() {
+  constructor() {
+    super();
     this.isGrabbing = false;
-    this._handToObject = null;
+    this.activeController = null; // Añadido para gestionar el controlador activo
 
+    // --- OPTIMIZACIÓN CRÍTICA ---
+    // Pre-asignamos todas las variables que se usan repetitivamente en el bucle
+    this._handToObject = new THREE.Matrix4();
+    this._mH = new THREE.Matrix4();
+    this._mO = new THREE.Matrix4();
+    this._mParentInv = new THREE.Matrix4();
+    this._mOlocal = new THREE.Matrix4();
+    this._pos = new THREE.Vector3();
+    this._quat = new THREE.Quaternion();
+    this._scl = new THREE.Vector3();
+    
+    this.originalColor = new THREE.Color(0x00ffcc);
+  }
+
+  init() {
     // Iluminación
     this.add(new THREE.HemisphereLight(0xbbbbbb, 0x888888, 3));
     const light = new THREE.DirectionalLight(0xffffff, 2);
@@ -47,74 +63,90 @@ class BallExperience extends xb.Script {
     this.add(light);
 
     // Pelota
-    this.originalColor = new THREE.Color(0x00ffcc);
     const geometry = new THREE.SphereGeometry(0.06, 32, 32);
-    const material = new THREE.MeshPhongMaterial({color: this.originalColor});
+    // Usamos StandardMaterial que reacciona un poco mejor a la luz que Phong
+    const material = new THREE.MeshStandardMaterial({
+      color: this.originalColor,
+      roughness: 0.2,
+      metalness: 0.1
+    });
     this.target = new THREE.Mesh(geometry, material);
     
     // Posicionar frente al usuario
     this.target.position.set(0, 1.2, -0.4);
     this.add(this.target);
     
-    console.log("Acerca tu mano a la pelota para tocarla o agarrarla.");
+    console.log("Acerca tu mano a la pelota y cierra el puño para agarrarla.");
   }
 
   // --- HITBOX: Reacción al toque ---
   onObjectTouchStart(event) {
-    this.target.material.color.setHex(0xffff00); // Amarillo cuando tu mano la atraviesa/toca
+    this.target.material.color.setHex(0xffff00); // Amarillo cuando tu mano la atraviesa
   }
 
   onObjectTouchEnd(event) {
     if (!this.isGrabbing) {
-      this.target.material.color.copy(this.originalColor); // Vuelve al color original
+      this.target.material.color.copy(this.originalColor); // Vuelve al turquesa original
     }
   }
 
-  // --- HITBOX: Reacción al agarre (Pinza) ---
-  onObjectGrabStart(event) {
+  // --- AGARRE: Usar puño cerrado (Squeeze) en lugar de pinza ---
+  onSqueezeStart(event) {
     if (this.isGrabbing) return;
-    this.isGrabbing = true;
-    this.target.material.color.setHex(0xff0000); // Rojo mientras la sujetas
+    
+    const controller = event.target;
+    const intersections = xb.core.input.intersectObjectByController(controller, this.target);
+    
+    if (intersections.length > 0) {
+      this.isGrabbing = true;
+      this.activeController = controller;
+      this.target.material.color.setHex(0xff0000); // Rojo mientras la sujetas con el puño
 
-    // Guardar la transformación delta inicial mano-objeto
-    this.target.updateMatrixWorld(true);
-    event.hand.updateMatrixWorld(true);
+      // Guardar la transformación delta inicial usando las matrices pre-asignadas
+      this.target.updateMatrixWorld(true);
+      controller.updateMatrixWorld(true);
 
-    const H0 = new THREE.Matrix4().copy(event.hand.matrixWorld);
-    const O0 = new THREE.Matrix4().copy(this.target.matrixWorld);
-    this._handToObject = new THREE.Matrix4().copy(H0).invert().multiply(O0);
+      const H0 = this._mH.copy(controller.matrixWorld);
+      const O0 = this._mO.copy(this.target.matrixWorld);
+      this._handToObject.copy(H0).invert().multiply(O0);
+    }
   }
 
-  onObjectGrabbing(event) {
-    if (!this.isGrabbing || !this._handToObject) return;
+  /**
+   * Mover el objeto de forma estable
+   */
+  onSqueezing(event) {
+    if (!this.isGrabbing || event.target !== this.activeController) return;
 
-    // Mover el objeto en base a la posición de la mano
-    event.hand.updateMatrixWorld(true);
-    const H = new THREE.Matrix4().copy(event.hand.matrixWorld);
-    const O = new THREE.Matrix4().multiplyMatrices(H, this._handToObject);
+    const controller = this.activeController;
+    controller.updateMatrixWorld(true);
+    
+    this._mH.copy(controller.matrixWorld);
+    this._mO.multiplyMatrices(this._mH, this._handToObject);
     
     const parent = this.target.parent;
     if (parent) parent.updateMatrixWorld(true);
-    const parentInv = parent
-      ? new THREE.Matrix4().copy(parent.matrixWorld).invert()
-      : new THREE.Matrix4().identity();
+    
+    if (parent) {
+      this._mParentInv.copy(parent.matrixWorld).invert();
+    } else {
+      this._mParentInv.identity();
+    }
 
-    const Olocal = new THREE.Matrix4().multiplyMatrices(parentInv, O);
-    const pos = new THREE.Vector3();
-    const quat = new THREE.Quaternion();
-    const scl = new THREE.Vector3();
-    Olocal.decompose(pos, quat, scl);
+    this._mOlocal.multiplyMatrices(this._mParentInv, this._mO);
+    this._mOlocal.decompose(this._pos, this._quat, this._scl);
 
-    this.target.position.copy(pos);
-    this.target.quaternion.copy(quat);
+    this.target.position.copy(this._pos);
+    this.target.quaternion.copy(this._quat);
     this.target.updateMatrix();
   }
 
-  onObjectGrabEnd(event) {
-    if (!this.isGrabbing) return;
-    this.isGrabbing = false;
-    this._handToObject = null;
-    this.target.material.color.copy(this.originalColor);
+  onSqueezeEnd(event) {
+    if (this.isGrabbing && event.target === this.activeController) {
+      this.isGrabbing = false;
+      this.activeController = null;
+      this.target.material.color.copy(this.originalColor);
+    }
   }
 }
 
@@ -129,7 +161,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   options.hands.visualization = true;
   options.hands.visualizeMeshes = true;
   
-  options.setAppTitle('Hitbox y Agarre Nativo');
+  options.setAppTitle('Hitbox Mejorada');
 
   try {
     await xb.init(options);
