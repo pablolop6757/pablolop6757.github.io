@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="es">
   <head>
-    <title>Pelota Interactiva XR | XR Blocks</title>
+    <title>Pelota Física XR | XR Blocks</title>
     <meta charset="UTF-8" />
     <meta
       name="viewport"
@@ -14,6 +14,7 @@
     <script type="importmap">
       {
         "imports": {
+          "@dimforge/rapier3d-simd-compat": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-simd-compat@0.19.2/rapier.mjs",
           "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
           "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
           "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
@@ -30,10 +31,10 @@
 import 'xrblocks/addons/simulator/SimulatorAddons.js';
 import * as THREE from 'three';
 import * as xb from 'xrblocks';
+import RAPIER from '@dimforge/rapier3d-simd-compat';
 
 /**
- * Versión Oficial de Agarre para Meta Quest 3.
- * Usa los eventos nativos de Touch y Grab para interacciones perfectas.
+ * Versión Definitiva con Físicas y Colisiones Reales.
  */
 class BallExperience extends xb.Script {
   init() {
@@ -46,37 +47,73 @@ class BallExperience extends xb.Script {
     light.position.set(1, 1, 1).normalize();
     this.add(light);
 
-    // Pelota
+    // Pelota Visual
     this.originalColor = new THREE.Color(0x00ffcc);
     const geometry = new THREE.SphereGeometry(0.06, 32, 32);
     const material = new THREE.MeshPhongMaterial({color: this.originalColor});
     this.target = new THREE.Mesh(geometry, material);
     
-    // Posicionar frente al usuario
-    this.target.position.set(0, 1.2, -0.4);
+    // Posición de aparición (caerá por gravedad)
+    this.target.position.set(0, 1.5, -0.4);
     this.add(this.target);
     
-    console.log("Acerca tu mano a la pelota para tocarla o agarrarla.");
+    console.log("¡Pelota física creada! Atrápala o déjala caer.");
   }
 
-  // --- HITBOX: Reacción al toque ---
+  /**
+   * Este método es llamado automáticamente por XR Blocks cuando el motor de físicas está listo.
+   */
+  initPhysics(physics) {
+    this.RAPIER = physics.RAPIER;
+    this.blendedWorld = physics.blendedWorld;
+
+    // 1. Crear el cuerpo rígido (Dinámico por defecto para que la gravedad le afecte)
+    const desc = this.RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(this.target.position.x, this.target.position.y, this.target.position.z);
+    
+    this.body = this.blendedWorld.createRigidBody(desc);
+    
+    // 2. Crear el colisionador con forma de esfera y asignarle "rebote" (restitution)
+    const shape = this.RAPIER.ColliderDesc.ball(0.06)
+        .setRestitution(0.8) // 80% de rebote
+        .setFriction(0.4);   // Fricción media
+        
+    this.collider = this.blendedWorld.createCollider(shape, this.body);
+  }
+
+  /**
+   * Sincronizamos la malla 3D con el motor de físicas en cada fotograma.
+   */
+  update() {
+    if (!this.isGrabbing && this.body) {
+      // Si no la estamos sujetando, la pelota sigue las leyes de la física
+      this.target.position.copy(this.body.translation());
+      this.target.quaternion.copy(this.body.rotation());
+    }
+  }
+
+  // --- REACCIÓN AL TOQUE ---
   onObjectTouchStart(event) {
-    this.target.material.color.setHex(0xffff00); // Amarillo cuando tu mano la atraviesa/toca
+    this.target.material.color.setHex(0xffff00);
   }
 
   onObjectTouchEnd(event) {
     if (!this.isGrabbing) {
-      this.target.material.color.copy(this.originalColor); // Vuelve al color original
+      this.target.material.color.copy(this.originalColor);
     }
   }
 
-  // --- HITBOX: Reacción al agarre (Pinza) ---
+  // --- REACCIÓN AL AGARRE (Pinza) ---
   onObjectGrabStart(event) {
     if (this.isGrabbing) return;
     this.isGrabbing = true;
-    this.target.material.color.setHex(0xff0000); // Rojo mientras la sujetas
+    this.target.material.color.setHex(0xff0000); 
 
-    // Guardar la transformación delta inicial mano-objeto
+    // Al agarrarla, la convertimos en un objeto "Kinematic" (ignorará la gravedad mientras la sujetamos)
+    if (this.body) {
+      this.body.setBodyType(this.RAPIER.RigidBodyType.KinematicPositionBased, true);
+    }
+
     this.target.updateMatrixWorld(true);
     event.hand.updateMatrixWorld(true);
 
@@ -88,7 +125,6 @@ class BallExperience extends xb.Script {
   onObjectGrabbing(event) {
     if (!this.isGrabbing || !this._handToObject) return;
 
-    // Mover el objeto en base a la posición de la mano
     event.hand.updateMatrixWorld(true);
     const H = new THREE.Matrix4().copy(event.hand.matrixWorld);
     const O = new THREE.Matrix4().multiplyMatrices(H, this._handToObject);
@@ -105,9 +141,16 @@ class BallExperience extends xb.Script {
     const scl = new THREE.Vector3();
     Olocal.decompose(pos, quat, scl);
 
+    // Actualizar malla visual
     this.target.position.copy(pos);
     this.target.quaternion.copy(quat);
     this.target.updateMatrix();
+
+    // Actualizar cuerpo físico (para que detecte con qué chocamos al mover la mano)
+    if (this.body) {
+      this.body.setNextKinematicTranslation(pos);
+      this.body.setNextKinematicRotation(quat);
+    }
   }
 
   onObjectGrabEnd(event) {
@@ -115,6 +158,13 @@ class BallExperience extends xb.Script {
     this.isGrabbing = false;
     this._handToObject = null;
     this.target.material.color.copy(this.originalColor);
+
+    // Al soltarla, vuelve a ser Dinámica. 
+    // ¡Rapier mantendrá la inercia del movimiento de tu mano y podrás lanzarla!
+    if (this.body) {
+      this.body.setBodyType(this.RAPIER.RigidBodyType.Dynamic, true);
+      this.body.wakeUp(); // Despertar a la física por si acaso
+    }
   }
 }
 
@@ -123,13 +173,18 @@ document.addEventListener('DOMContentLoaded', async function () {
   const options = new xb.Options();
   
   options.enableHands();
-  
-  // Habilitamos opciones de manos avanzadas
   options.hands.enabled = true;
   options.hands.visualization = true;
   options.hands.visualizeMeshes = true;
   
-  options.setAppTitle('Hitbox y Agarre Nativo');
+  // --- CONFIGURACIÓN CLAVE PARA FÍSICAS MUNDIALES ---
+  options.physics.RAPIER = RAPIER; // Inyectar el motor de físicas
+  
+  // Activar la creación de colisionadores basados en la geometría real de tu habitación (Depth Mesh)
+  options.depth = new xb.DepthOptions(xb.xrDepthMeshPhysicsOptions);
+  options.depth.depthMesh.colliderUpdateFps = 5; // Frecuencia de actualización de los muebles/suelo reales
+  
+  options.setAppTitle('Pelota con Físicas');
 
   try {
     await xb.init(options);
