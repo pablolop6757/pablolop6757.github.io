@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="es">
   <head>
-    <title>Mantenimiento Panel Eléctrico | XR Blocks</title>
-
+    <title>Pelota Interactiva XR | XR Blocks</title>
+    <meta charset="UTF-8" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, user-scalable=no"
@@ -16,15 +16,10 @@
         "imports": {
           "three": "https://cdn.jsdelivr.net/npm/three@0.182.0/build/three.module.js",
           "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.182.0/examples/jsm/",
-          "troika-three-text": "https://cdn.jsdelivr.net/gh/protectwise/troika@028b81cf308f0f22e5aa8e78196be56ec1997af5/packages/troika-three-text/src/index.js",
-          "troika-three-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-three-utils/src/index.js",
-          "troika-worker-utils": "https://cdn.jsdelivr.net/gh/protectwise/troika@v0.52.4/packages/troika-worker-utils/src/index.js",
-          "bidi-js": "https://esm.sh/bidi-js@%5E1.0.2?target=es2022",
-          "webgl-sdf-generator": "https://esm.sh/webgl-sdf-generator@1.1.1/es2022/webgl-sdf-generator.mjs",
           "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
           "lit/": "https://esm.run/lit@3/",
-          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.10.0/build/xrblocks.js",
-          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.10.0/build/addons/"
+          "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/xrblocks.js",
+          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/addons/"
         }
       }
     </script>
@@ -37,658 +32,126 @@ import * as THREE from 'three';
 import * as xb from 'xrblocks';
 
 /**
- * Aplicación de mantenimiento guiado 100% estable.
+ * Versión mejorada con pelota más grande y agarre dinámico relativo.
  */
-class MaintenanceApp extends xb.Script {
-  
+class BallExperience extends xb.Script {
   constructor() {
     super();
-    this.currentStepIndex = 0;
-    this.marker = null;
-    this.panelModel = null;
-    this.isWaitingForInteraction = false;
+    this.ball = null;
+    this.activeController = null;
+    this.isGrabbing = false;
     
-    // SISTEMA ANTI-BLOQUEO: Usamos un temporizador en lugar de estados booleanos
-    this.lastInteractionTime = 0; 
+    // Colores pre-definidos
+    this.colorNormal = new THREE.Color(0x00ffcc);
+    this.colorGrab = new THREE.Color(0xffff00);
     
-    this.raycaster = new THREE.Raycaster();
-    this.pointer = new THREE.Vector2();
-    
-    // Para debugging visual
-    this.debugText = null;
-    this.debugEnabled = true;
-
-    // Altura y profundidad base
-    const h = 1.0; 
-    const z = -0.85; 
-
-    // Posiciones en cuadrícula simulando la imagen
-    this.steps = [
-      {
-        title: "Inicio",
-        text: "Mantenimiento del panel TSK.\n\nPulsa 'Empezar' y sigue los cubos azules.\nAcerca la mano o apunta con el mando.",
-        markerPos: null
-      },
-      {
-        title: "Paso 1: Seccionador (F1)",
-        text: "Localiza el seccionador principal (F1).\n\nTócalo para desenergizar.",
-        markerPos: new THREE.Vector3(-0.2, h + 0.3, z) 
-      },
-      {
-        title: "Paso 2: Disyuntor Q1",
-        text: "Baja y sube el disyuntor Q1.\n\nToca el cubo azul al terminar.",
-        markerPos: new THREE.Vector3(-0.15, h + 0.1, z) 
-      },
-      {
-        title: "Paso 3: Disyuntor Q2",
-        text: "Baja y sube el disyuntor Q2.\n\nToca el cubo azul al terminar.",
-        markerPos: new THREE.Vector3(0.0, h + 0.1, z) 
-      },
-      {
-        title: "Paso 4: Disyuntor Q3",
-        text: "Baja y sube el disyuntor Q3.\n\nToca el cubo azul al terminar.",
-        markerPos: new THREE.Vector3(0.15, h + 0.1, z) 
-      },
-      {
-        title: "Paso 5: Selector (M)",
-        text: "Revisa el selector Manual/Auto (M).\n\nToca el cubo azul para confirmar.",
-        markerPos: new THREE.Vector3(-0.1, h - 0.1, z) 
-      },
-      {
-        title: "Paso 6: Pulsador (B)",
-        text: "Comprueba el pulsador negro (B).\n\nToca el cubo azul.",
-        markerPos: new THREE.Vector3(0.1, h - 0.1, z) 
-      },
-      {
-        title: "Paso 7: Piloto Rojo (R)",
-        text: "Revisa el piloto rojo (R).\n\nToca el cubo azul.",
-        markerPos: new THREE.Vector3(-0.15, h - 0.3, z) 
-      },
-      {
-        title: "Paso 8: Piloto Amarillo (Y)",
-        text: "Revisa el piloto amarillo (Y).\n\nToca el cubo azul.",
-        markerPos: new THREE.Vector3(0.0, h - 0.3, z) 
-      },
-      {
-        title: "Paso 9: Piloto Verde (G)",
-        text: "Revisa el piloto verde (G).\n\nToca el cubo azul.",
-        markerPos: new THREE.Vector3(0.15, h - 0.3, z) 
-      },
-      {
-        title: "Paso 10: Reenergizar (F1)",
-        text: "Activa el seccionador principal (F1) para restaurar la energía.\n\nToca el cubo.",
-        markerPos: new THREE.Vector3(-0.2, h + 0.3, z) 
-      },
-      {
-        title: "¡Completado!",
-        text: "Mantenimiento finalizado con éxito.\n\nPuedes pulsar 'Reiniciar'.",
-        markerPos: null
-      }
-    ];
-
-    window.addEventListener('pointerdown', this.onPointerDown.bind(this));
+    // Almacenamos la posición y rotación relativa al momento de agarrar
+    this.localOffset = new THREE.Vector3();
   }
 
-  async init() {
-    this.add(new THREE.HemisphereLight(0xffffff, 0x666666, 2.5));
+  init() {
+    // Añadimos luces para dar volumen a la pelota más grande
+    this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.5));
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
-    dirLight.position.set(2, 5, 3);
+    dirLight.position.set(1, 2, 1);
     this.add(dirLight);
 
-    this.createInstructionPanel();
-    this.createDebugPanel();
-    await this.loadElectricalPanel();
-    this.createInteractionMarker();
-
-    this.updateStepUI();
-
-    // ESCUCHAR CLICS/TRIGGERS VIA RAYCASTING
-    this.setupClickHandling();
-    
-    // DIAGNOSTICAR xb.core
-    setTimeout(() => {
-      this.diagnosticXRCore();
-    }, 2000);
-
-    // ACTUALIZAR DEBUG PANEL CONTINUAMENTE
-    this.startDebugUpdater();
-  }
-
-  createDebugPanel() {
-    // Panel grande y visible para debugging
-    const debugPanel = new xb.SpatialPanel({
-      width: 1.2,
-      height: 1.0,
-      backgroundColor: '#1a1a1add'
-    });
-    
-    debugPanel.position.set(-0.9, 0.8, -0.8);
-    debugPanel.rotation.y = 0.3;
-    this.add(debugPanel);
-
-    const grid = debugPanel.addGrid();
-    
-    this.debugRow1 = grid.addRow({weight: 0.2}).addText({
-      text: 'INICIALIZANDO...',
-      fontColor: '#ffff00',
-      fontSize: 0.05
-    });
-
-    this.debugRow2 = grid.addRow({weight: 0.3}).addText({
-      text: '...',
-      fontColor: '#ffffff',
-      fontSize: 0.04
-    });
-
-    this.debugRow3 = grid.addRow({weight: 0.3}).addText({
-      text: '...',
-      fontColor: '#ffffff',
-      fontSize: 0.04
-    });
-
-    this.debugRow4 = grid.addRow({weight: 0.2}).addText({
-      text: '...',
-      fontColor: '#00ff00',
-      fontSize: 0.04
-    });
-    
-    this.debugPanel = debugPanel;
-    this.debugPanelReady = true;
-  }
-
-  startDebugUpdater() {
-    console.log("DEBUG UPDATER INICIADO");
-    
-    setInterval(() => {
-      try {
-        this.updateDebugPanel();
-      } catch (e) {
-        console.error("Error en updateDebugPanel:", e);
-      }
-    }, 100);
-  }
-
-  updateDebugPanel() {
-    if (!this.debugPanelReady) return;
-
-    try {
-      if (!this.debugRow1) return;
-
-      // Línea 1: Estado general
-      let line1 = "SYSTEM";
-      this.debugRow1.setText(line1);
-
-      // Línea 2-3: Input Sources y botones
-      let line2 = "Inputs: ?";
-      let line3 = "Status: ?";
-
-      try {
-        let session = null;
-        
-        // Intenta múltiples formas de acceder a la sesión
-        if (xb.core && xb.core.session) {
-          session = xb.core.session;
-        } else if (xb.core && xb.core.renderer && xb.core.renderer.xr && xb.core.renderer.xr.getSession) {
-          session = xb.core.renderer.xr.getSession();
-        }
-
-        if (session && session.inputSources) {
-          const numSources = session.inputSources.length;
-          line2 = "Inputs: " + numSources;
-
-          line3 = "Status: ";
-          
-          for (let i = 0; i < numSources; i++) {
-            try {
-              const source = session.inputSources[i];
-              const isHand = source.hand ? "H" : "C";
-              const trigger = source.gamepad && source.gamepad.buttons && source.gamepad.buttons[0] && source.gamepad.buttons[0].pressed ? "T" : " ";
-              const grip = source.gamepad && source.gamepad.buttons && source.gamepad.buttons[1] && source.gamepad.buttons[1].pressed ? "G" : " ";
-              
-              line3 += "[" + isHand + trigger + grip + "]";
-            } catch (e) {}
-          }
-        } else {
-          line2 = "Inputs: NONE";
-        }
-      } catch (e) {
-        line2 = "Inputs: ERROR";
-        line3 = "Error: " + e.toString().substring(0, 20);
-      }
-
-      if (this.debugRow2) this.debugRow2.setText(line2);
-      if (this.debugRow3) this.debugRow3.setText(line3);
-
-      // Línea 4: Estado del cubo
-      let line4 = "Cubo: ";
-      if (this.marker && this.marker.visible) {
-        line4 += "OK";
-        if (this.isWaitingForInteraction) {
-          line4 += " | Listo";
-        }
-      } else {
-        line4 += "NO";
-      }
-      
-      if (this.debugRow4) this.debugRow4.setText(line4);
-
-    } catch (e) {
-      console.error("Error en updateDebugPanel:", e);
-    }
-  }
-
-  diagnosticXRCore() {
-    console.log("🔍 DIAGNOSTICO DE xb.core:");
-    console.log("xb.core:", xb.core);
-    console.log("xb.core.session:", xb.core?.session);
-    console.log("xb.core.frame:", xb.core?.frame);
-    console.log("xb.core.renderer:", xb.core?.renderer);
-    console.log("xb.core.renderer.xr:", xb.core?.renderer?.xr);
-    
-    try {
-      if (xb.core?.renderer?.xr?.getSession) {
-        const sess = xb.core.renderer.xr.getSession();
-        console.log("getSession() devolvió:", sess);
-        console.log("inputSources:", sess?.inputSources);
-        
-        if (sess?.inputSources) {
-          for (let i = 0; i < sess.inputSources.length; i++) {
-            console.log(`InputSource ${i}:`, sess.inputSources[i]);
-            console.log(`  - gamepad:`, sess.inputSources[i].gamepad);
-            console.log(`  - buttons:`, sess.inputSources[i].gamepad?.buttons);
-          }
-        }
-      }
-    } catch (e) {
-      console.error("Error en diagnostico:", e);
-    }
-  }
-
-  handleSelectStart(event) {
-    console.log("✅ handleSelectStart llamado:", event);
-    
-    if (!this.marker || !this.marker.visible || !this.isWaitingForInteraction) {
-      return;
-    }
-
-    const now = performance.now();
-    if (now - this.lastInteractionTime < 1500) {
-      return;
-    }
-
-    console.log("✅ Trigger detectado via evento!");
-    this.triggerSuccess();
-  }
-
-  setupClickHandling() {
-    console.log("🎯 Configurando click handling...");
-    
-    // ESTRATEGIA 1: Escuchar en navigator.xr si está disponible
-    setTimeout(() => {
-      try {
-        if (navigator.xr) {
-          console.log("✅ navigator.xr disponible");
-          
-          // Acceder a la isActive sesión actual
-          navigator.xr.isSessionSupported('immersive-vr').then(supported => {
-            console.log("VR soportado:", supported);
-          });
-        }
-      } catch (e) {
-        console.log("navigator.xr no disponible:", e.message);
-      }
-
-      // ESTRATEGIA 2: Acceder directamente a la sesión WebXR de XR Blocks
-      try {
-        if (xb.core && xb.core.session) {
-          console.log("✅ xb.core.session encontrada");
-          
-          // Escuchar selectstart
-          xb.core.session.addEventListener('selectstart', (e) => {
-            console.log("🎮 XR Session selectstart:", e);
-            this.handleSelectStart(e);
-          });
-
-          // También input select
-          xb.core.session.addEventListener('select', (e) => {
-            console.log("🎮 XR Session select:", e);
-            this.handleSelectStart(e);
-          });
-
-          // Squeeze/pinch
-          xb.core.session.addEventListener('squeezestart', (e) => {
-            console.log("👊 XR Session squeezestart:", e);
-            this.handleSelectStart(e);
-          });
-        } else {
-          console.log("⚠️ xb.core.session NO encontrada");
-        }
-      } catch (e) {
-        console.error("Error accediendo session:", e);
-      }
-    }, 1000);
-
-    // ESTRATEGIA 3: Escuchar globalmente en window
-    window.addEventListener('selectstart', (e) => {
-      console.log("🪟 Window selectstart");
-      this.handleSelectStart(e);
-    });
-
-    // ESTRATEGIA 4: Hacer el cubo interactable con raycasting continuo
-    this.setupCubeInteraction();
-  }
-
-  setupCubeInteraction() {
-    // Polling continuo para ver si el trigger está presionado
-    console.log("🏁 setupCubeInteraction iniciado");
-    
-    const pollingLoop = setInterval(() => {
-      try {
-        if (!this.marker || !this.marker.visible || !this.isWaitingForInteraction) {
-          return;
-        }
-
-        const now = performance.now();
-        if (now - this.lastInteractionTime < 1500) {
-          return; // Anti-spam
-        }
-
-        let triggerDetected = false;
-
-        // OPCIÓN 1: xb.core.session.inputSources
-        try {
-          if (xb.core?.session?.inputSources) {
-            for (const source of xb.core.session.inputSources) {
-              if (source.gamepad?.buttons?.[0]?.pressed) {
-                console.log("✅ TRIGGER DETECTADO (xb.core.session)");
-                triggerDetected = true;
-                break;
-              }
-              if (source.gamepad?.buttons?.[1]?.pressed) {
-                console.log("✅ GRIP DETECTADO (xb.core.session)");
-                triggerDetected = true;
-                break;
-              }
-            }
-          }
-        } catch (e) {}
-
-        // OPCIÓN 2: xb.core.renderer.xr.getSession()
-        if (!triggerDetected) {
-          try {
-            if (xb.core?.renderer?.xr?.getSession) {
-              const session = xb.core.renderer.xr.getSession();
-              if (session?.inputSources) {
-                for (const source of session.inputSources) {
-                  if (source.gamepad?.buttons?.[0]?.pressed) {
-                    console.log("✅ TRIGGER DETECTADO (renderer.xr)");
-                    triggerDetected = true;
-                    break;
-                  }
-                  if (source.gamepad?.buttons?.[1]?.pressed) {
-                    console.log("✅ GRIP DETECTADO (renderer.xr)");
-                    triggerDetected = true;
-                    break;
-                  }
-                }
-              }
-            }
-          } catch (e) {}
-        }
-
-        // OPCIÓN 3: xb.core.frame
-        if (!triggerDetected) {
-          try {
-            const frame = xb.core?.frame;
-            if (frame?.session?.inputSources) {
-              for (const source of frame.session.inputSources) {
-                if (source.gamepad?.buttons?.[0]?.pressed) {
-                  console.log("✅ TRIGGER DETECTADO (frame.session)");
-                  triggerDetected = true;
-                  break;
-                }
-              }
-            }
-          } catch (e) {}
-        }
-
-        if (triggerDetected) {
-          console.log("🎯 Llamando triggerSuccess()");
-          this.triggerSuccess();
-        }
-
-      } catch (e) {
-        console.error("Error en polling:", e.message);
-      }
-    }, 50); // Revisar cada 50ms
-
-    this.pollingLoop = pollingLoop;
-  }
-
-  createInstructionPanel() {
-    // Un SpatialPanel simple, arrastrable por defecto en XR Blocks
-    this.uiPanel = new xb.SpatialPanel({
-      width: 0.9,
-      height: 0.7,
-      backgroundColor: '#1a1a24ee', 
-      showEdge: true,               
-      edgeColor: '#3a3a4a'
-    });
-    
-    this.uiPanel.position.set(-0.7, 1.2, -0.9);
-    this.uiPanel.rotation.set(0, Math.PI / 6, 0); 
-    this.add(this.uiPanel);
-
-    const grid = this.uiPanel.addGrid();
-    
-    this.titleText = grid.addRow({weight: 0.25}).addText({
-      text: 'Cargando...',
-      fontColor: '#00ccff', 
-      fontSize: 0.07
-    });
-    
-    grid.addRow({weight: 0.05}).addPanel({
-        backgroundColor: '#3a3a4a',
-        width: 0.8,
-        height: 0.01
-    });
-
-    this.descText = grid.addRow({weight: 0.5}).addText({
-      text: 'Por favor espera...',
-      fontColor: '#ffffff',
-      fontSize: 0.05,
-      textAlign: 'center'
-    });
-
-    const btnRow = grid.addRow({weight: 0.2});
-    btnRow.addCol({weight: 0.15});
-    this.actionBtn = btnRow.addCol({weight: 0.7}).addTextButton({
-      text: 'Empezar',
-      backgroundColor: '#0066ff',
-      fontSize: 0.05
-    });
-    btnRow.addCol({weight: 0.15});
-
-    this.actionBtn.onTriggered = () => {
-      const now = performance.now();
-      // Si estamos en un menú y ha pasado 1 segundo desde la última interacción
-      if (!this.isWaitingForInteraction && (now - this.lastInteractionTime > 1000)) {
-        this.triggerSuccess();
-      }
-    };
-  }
-
-  async loadElectricalPanel() {
-    try {
-      const loader = new xb.ModelLoader();
-      const gltf = await loader.load({
-        url: 'TSK_Box2.glb',
-        renderer: xb.core.renderer
-      });
-      
-      this.panelModel = gltf.scene;
-      this.panelModel.rotation.x = Math.PI / 2;
-      this.panelModel.updateMatrixWorld(true);
-      
-      const box = new THREE.Box3().setFromObject(this.panelModel);
-      const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
-
-      const maxDim = Math.max(size.x, size.y, size.z);
-      const targetSize = 0.9; 
-      const scale = maxDim > 0 ? targetSize / maxDim : 1;
-      
-      this.panelModel.scale.set(scale, scale, scale);
-
-      this.panelModel.position.set(
-        -center.x * scale,
-        (-center.y * scale) + 1.0, 
-        (-center.z * scale) - 1.0 
-      );
-
-      // HACER EL MODELO MÁS SÓLIDO Y OPACO
-      this.panelModel.traverse((child) => {
-        if (child.isMesh && child.material) {
-          // Aumentar opacidad
-          if (child.material.opacity !== undefined) {
-            child.material.opacity = 1.0;
-          }
-          
-          // Desactivar transparencia
-          if (child.material.transparent !== undefined) {
-            child.material.transparent = false;
-          }
-          
-          // Activar renderOrder para evitar z-fighting
-          child.renderOrder = 1;
-          
-          // Hacer castShadow y receiveShadow
-          child.castShadow = true;
-          child.receiveShadow = true;
-        }
-      });
-      
-      this.add(this.panelModel);
-    } catch (error) {
-      console.error("Error al cargar el modelo:", error);
-      this.titleText.setText("Error");
-      this.descText.setText("No se pudo cargar el modelo.");
-    }
-  }
-
-  createInteractionMarker() {
-    // Cubo grande, sin bordes de alambre para evitar cuelgues del raycaster
-    const geometry = new THREE.BoxGeometry(0.15, 0.15, 0.15); 
-    
-    this.markerMaterial = new THREE.MeshBasicMaterial({
-      color: 0x0066ff,
+    // Pelota más grande (radio 0.12 en lugar de 0.04) y con material reactivo a la luz
+    const geometry = new THREE.SphereGeometry(0.12, 32, 32);
+    const material = new THREE.MeshPhongMaterial({
+      color: this.colorNormal,
       transparent: true,
-      opacity: 0.75
+      opacity: 0.9,
+      shininess: 60 // Añade un brillo para mejorar la percepción 3D
     });
+
+    this.ball = new THREE.Mesh(geometry, material);
+    this.ball.position.set(0, 1.3, -0.6); // Un poco más alejada para compensar el tamaño
+    this.add(this.ball);
     
-    this.marker = new THREE.Mesh(geometry, this.markerMaterial);
-    this.marker.visible = false;
-    this.add(this.marker);
+    console.log("Experiencia cargada. Intenta agarrar la pelota.");
   }
 
-  updateStepUI() {
-    const step = this.steps[this.currentStepIndex];
-    
-    this.titleText.setText(step.title);
-    this.descText.setText(step.text);
+  /**
+   * Identificamos el controlador y calculamos el "offset" para un agarre realista.
+   */
+  onSelectStart(event) {
+    if (this.isGrabbing) return;
 
-    if (step.markerPos) {
-      this.isWaitingForInteraction = true;
-      this.marker.position.copy(step.markerPos);
-      this.marker.visible = true;
+    const controller = event.target;
+    if (!controller) return;
+
+    const intersections = xb.core.input.intersectObjectByController(controller, this.ball);
+    
+    if (intersections.length > 0) {
+      this.isGrabbing = true;
+      this.activeController = controller;
+      this.ball.material.color.copy(this.colorGrab);
       
-      this.actionBtn.setText('👉 Toca el cubo azul');
-      this.actionBtn.options.backgroundColor = '#333333'; 
-      this.actionBtn.options.fontColor = '#888888'; 
-    } else {
-      this.isWaitingForInteraction = false;
-      this.marker.visible = false;
-      
-      this.actionBtn.setText(this.currentStepIndex === 0 ? 'Empezar' : 'Reiniciar');
-      this.actionBtn.options.backgroundColor = '#0066ff';
-      this.actionBtn.options.fontColor = '#ffffff'; 
-    }
-    
-    this.uiPanel.updateLayouts();
-  }
-
-  triggerSuccess() {
-    const now = performance.now();
-    // Bloqueo estricto de 1.5 segundos para evitar toques múltiples / cuelgues
-    if (now - this.lastInteractionTime < 1500) return; 
-    
-    this.lastInteractionTime = now;
-    
-    if (this.marker.visible) {
-      this.markerMaterial.color.setHex(0x00ff00); // Se pone Verde
-    }
-    
-    // Cambia al siguiente paso después de 400ms
-    setTimeout(() => {
-      if (this.marker.visible) {
-        this.markerMaterial.color.setHex(0x0066ff); // Vuelve a Azul
-      }
-      
-      this.currentStepIndex++;
-      if (this.currentStepIndex >= this.steps.length) {
-        this.currentStepIndex = 0;
-      }
-      this.updateStepUI();
-    }, 400);
-  }
-
-  // MÉTODO 1: Clic con el ratón
-  onPointerDown(event) {
-    if (!this.isWaitingForInteraction || !this.marker.visible) return;
-
-    this.pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
-    this.pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
-    this.raycaster.setFromCamera(this.pointer, xb.core.camera);
-    
-    const intersects = this.raycaster.intersectObject(this.marker);
-    if (intersects.length > 0) {
-      this.triggerSuccess();
+      // Magia del agarre: calculamos la diferencia espacial entre la mano y la pelota 
+      // en este instante exacto para no "teletransportar" la pelota al centro de la mano.
+      this.localOffset.copy(this.ball.position)
+        .sub(controller.position)
+        .applyQuaternion(controller.quaternion.clone().invert());
     }
   }
 
-  // El update() sí se usa para animar el cubo
+  /**
+   * Liberamos la pelota.
+   */
+  onSelectEnd(event) {
+    if (this.isGrabbing && event.target === this.activeController) {
+      this.isGrabbing = false;
+      this.activeController = null;
+      this.ball.material.color.copy(this.colorNormal);
+    }
+  }
+
+  /**
+   * Actualizamos la posición suavemente (Lerp) respetando el agarre inicial.
+   */
   update() {
-    super.update();
-    
-    // Animar el cubo azul
-    if (this.marker && this.marker.visible) {
-      const now = performance.now();
-      this.marker.rotation.y += 0.02;
-      this.marker.rotation.x += 0.01;
-      this.marker.scale.setScalar(1.0 + Math.sin(now * 0.005) * 0.1);
+    if (this.isGrabbing && this.activeController) {
+      // 1. Calculamos a dónde debe ir la pelota basándonos en la posición de la mano + el offset inicial
+      const targetPos = this.activeController.position.clone()
+        .add(this.localOffset.clone().applyQuaternion(this.activeController.quaternion));
+      
+      // 2. Interpolación lineal para el movimiento (0.4 lo hace más rápido y responsivo)
+      this.ball.position.lerp(targetPos, 0.4);
+      
+      // 3. Interpolación esférica para la rotación
+      this.ball.quaternion.slerp(this.activeController.quaternion, 0.2);
+    }
+
+    // Seguridad: si el controlador deja de ser visible (se pierde el tracking), soltamos.
+    if (this.isGrabbing && this.activeController && !this.activeController.visible) {
+      this.isGrabbing = false;
+      this.activeController = null;
+      this.ball.material.color.copy(this.colorNormal);
     }
   }
 }
 
-document.addEventListener('DOMContentLoaded', function () {
+// Configuración de entrada e inicio
+document.addEventListener('DOMContentLoaded', async function () {
   const options = new xb.Options();
-  options.enableUI();
   
-  // Configurar manos y controladores para Meta Quest 3
-  options.enableHands(); 
-  options.hands.enabled = true;
+  options.enableHands();
+  
+  // Desactivamos retículas si lo deseas por rendimiento, aunque con la pelota grande ayuda a apuntar.
+  options.enableReticles(); 
+  
   options.hands.visualization = true;
+  options.hands.visualizeMeshes = true;
   
-  // Habilitar controladores también
-  options.controllers.enabled = true;
-  options.controllers.visualization = true;
-  
-  options.reticles.enabled = true;
-  options.simulator.defaultMode = xb.SimulatorMode.POSE;
-  options.setAppTitle('TSK Mantenimiento');
+  options.setAppTitle('Pelota Mejorada XR');
 
-  xb.add(new MaintenanceApp());
-  xb.init(options);
+  try {
+    await xb.init(options);
+    xb.add(new BallExperience());
+  } catch (err) {
+    console.error("Fallo al iniciar:", err);
+  }
 });
     </script>
   </body>
