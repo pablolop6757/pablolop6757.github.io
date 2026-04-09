@@ -145,36 +145,59 @@ class MaintenanceApp extends xb.Script {
     // INICIAR LOOP DE DETECCIÓN INDEPENDIENTE
     this.startTouchDetectionLoop();
     
-    // ESCUCHAR EVENTOS DE SELECCIÓN (alternativa a polling)
-    this.setupSelectionListeners();
+    // ESCUCHAR EVENTOS DE SELECCIÓN/TRIGGER
+    this.setupInputListeners();
   }
 
-  setupSelectionListeners() {
-    // Escuchar eventos de controlador para Meta Quest
-    this.addEventListener('selectstart', (e) => {
-      console.log("SELECT START en marker:", e);
-      if (this.marker && this.marker.visible) {
+  setupInputListeners() {
+    // Esperar a que la sesión WebXR esté lista
+    setTimeout(() => {
+      try {
+        if (xb.core?.session) {
+          console.log("✅ Sesión XR detectada, configurando listeners");
+          
+          // Escuchar selectstart (trigger principal)
+          xb.core.session.addEventListener('selectstart', (event) => {
+            console.log("🎮 TRIGGER DETECTADO!");
+            this.handleInputEvent(event);
+          });
+
+          // Para manos también
+          xb.core.session.addEventListener('squeeze', (event) => {
+            console.log("✋ PINCH DETECTADO!");
+            this.handleInputEvent(event);
+          });
+
+          // Try to add listeners to inputsources
+          for (const source of xb.core.session.inputSources || []) {
+            source.addEventListener?.('selectstart', (event) => {
+              console.log("📍 Source selectstart");
+              this.handleInputEvent(event);
+            });
+          }
+        }
+      } catch (e) {
+        console.error("Error configurando listeners:", e);
+      }
+    }, 500); // Esperar 500ms a que se inicialice
+
+    // También escuchar en el documento por si acaso
+    document.addEventListener('selectstart', (e) => {
+      console.log("📄 Document selectstart");
+      this.handleInputEvent(e);
+    });
+  }
+
+  handleInputEvent(event) {
+    console.log("handleInputEvent llamado:", event);
+    
+    if (this.marker && this.marker.visible && this.isWaitingForInteraction) {
+      const now = performance.now();
+      if (now - this.lastInteractionTime > 1500) {
+        console.log("✅ TRIGGER -> triggerSuccess");
         this.triggerSuccess();
       }
-    });
-
-    // También intentar listeners en el documento
-    try {
-      document.addEventListener('selectstart', (e) => {
-        console.log("Document selectstart");
-        if (this.marker && this.marker.visible) {
-          this.triggerSuccess();
-        }
-      });
-    } catch (e) {}
-
-    // Y en el marker directamente
-    try {
-      this.marker?.addEventListener('selectstart', () => {
-        console.log("Marker selectstart directo");
-        this.triggerSuccess();
-      });
-    } catch (e) {}
+    }
   }
 
   startTouchDetectionLoop() {
@@ -419,67 +442,60 @@ class MaintenanceApp extends xb.Script {
   updateDebugDisplay() {
     if (!this.debugText || !this.debugPanel) return;
 
-    let debugInfo = "🔍 DEBUG INFO\n";
+    let debugInfo = "🔍 DEBUG\n";
+    let triggerPressed = false;
+    let pinchDetected = false;
+    let inputSourcesFound = 0;
     
     try {
-      // Información del sistema
+      // Información básica
       const hasMarker = this.marker ? "✓" : "✗";
       const isWaiting = this.isWaitingForInteraction ? "✓" : "✗";
-      debugInfo += `Marker:${hasMarker} Wait:${isWaiting}\n`;
+      debugInfo += `M:${hasMarker} W:${isWaiting}\n`;
 
-      // INVESTIGAR xb.core
-      let coreInfo = [];
-      if (xb.core) {
-        if (xb.core.input) coreInfo.push("input✓");
-        if (xb.core.session) coreInfo.push("session✓");
-        if (xb.core.renderer) coreInfo.push("render✓");
-        if (xb.core.user) coreInfo.push("user✓");
-      }
-      
-      debugInfo += `Core: ${coreInfo.join(" ")}\n`;
-
-      // Contar controllers de varias formas
-      let ctrlInfo = "Ctrl:0";
+      // Verificar INPUT SOURCES
       try {
-        if (xb.core?.input?.controllers) {
-          ctrlInfo = `Ctrl:${xb.core.input.controllers.length}`;
-        }
-      } catch (e) {}
-
-      debugInfo += ctrlInfo;
-
-      // Mostrar distancia si hay controllers
-      if (this.marker?.visible) {
-        try {
-          let minDist = 999;
-          let found = false;
-
-          if (xb.core?.input?.controllers) {
-            const markerPos = new THREE.Vector3();
-            this.marker.getWorldPosition(markerPos);
+        if (xb.core?.session?.inputSources) {
+          for (const source of xb.core.session.inputSources) {
+            inputSourcesFound++;
             
-            for (const ctrl of xb.core.input.controllers) {
-              if (ctrl) {
-                found = true;
-                const ctrlPos = new THREE.Vector3();
-                if (typeof ctrl.getWorldPosition === 'function') {
-                  ctrl.getWorldPosition(ctrlPos);
-                } else if (ctrl.position) {
-                  ctrlPos.copy(ctrl.position);
+            // Verificar trigger
+            if (source.gamepad?.buttons[0]?.pressed) {
+              triggerPressed = true;
+            }
+
+            // Verificar pinch
+            if (source.hand) {
+              const indexFingerTip = source.hand.get('index-finger-tip');
+              const thumbTip = source.hand.get('thumb-tip');
+              
+              if (indexFingerTip?.position && thumbTip?.position) {
+                const d = Math.hypot(
+                  indexFingerTip.position[0] - thumbTip.position[0],
+                  indexFingerTip.position[1] - thumbTip.position[1],
+                  indexFingerTip.position[2] - thumbTip.position[2]
+                );
+                if (d < 0.02) {
+                  pinchDetected = true;
                 }
-                const dist = ctrlPos.distanceTo(markerPos);
-                minDist = Math.min(minDist, dist);
               }
             }
           }
+        }
+      } catch (e) {}
 
-          if (found) {
-            debugInfo += ` D:${(minDist * 100).toFixed(0)}cm`;
-          }
-        } catch (e) {}
+      debugInfo += `Sources:${inputSourcesFound}\n`;
+      
+      if (triggerPressed) {
+        debugInfo += "🎮 TRIGGER!";
+      } else if (pinchDetected) {
+        debugInfo += "✋ PINCH!";
+      } else {
+        debugInfo += "⏳ Esperando...";
       }
+
     } catch (e) {
-      debugInfo += `\nERROR: ${e.message.substring(0, 25)}`;
+      debugInfo += `\nERROR: ${e.message.substring(0, 20)}`;
     }
 
     // Actualizar texto
@@ -488,35 +504,15 @@ class MaintenanceApp extends xb.Script {
       this.debugPanel.updateLayouts();
     } catch (e) {}
 
-    // COLOR DEL CUBO
+    // CAMBIAR COLOR DEL CUBO basado en inputs
     if (this.marker && this.markerMaterial) {
-      this.markerMaterial.color.setHex(0xff0000); // Rojo por defecto (sin detectar)
-      
-      try {
-        if (xb.core?.input?.controllers?.length > 0) {
-          this.markerMaterial.color.setHex(0xffff00); // Amarillo si hay controllers
-          
-          const markerPos = new THREE.Vector3();
-          this.marker.getWorldPosition(markerPos);
-          
-          for (const ctrl of xb.core.input.controllers) {
-            if (ctrl) {
-              const ctrlPos = new THREE.Vector3();
-              if (typeof ctrl.getWorldPosition === 'function') {
-                ctrl.getWorldPosition(ctrlPos);
-              } else if (ctrl.position) {
-                ctrlPos.copy(ctrl.position);
-              }
-              const dist = ctrlPos.distanceTo(markerPos);
-              
-              if (dist < 0.25) {
-                this.markerMaterial.color.setHex(0x00ff00); // Verde si toque
-                break;
-              }
-            }
-          }
-        }
-      } catch (e) {}
+      if (triggerPressed || pinchDetected) {
+        this.markerMaterial.color.setHex(0x00ff00); // Verde = trigger/pinch presionado
+      } else if (inputSourcesFound > 0) {
+        this.markerMaterial.color.setHex(0xffff00); // Amarillo = controllers detectados
+      } else {
+        this.markerMaterial.color.setHex(0xff0000); // Rojo = sin input sources
+      }
     }
   }
 
@@ -535,20 +531,75 @@ class MaintenanceApp extends xb.Script {
 
     let touchDetected = false;
 
-    // ESTRATEGIA 1: Acceso a XR Blocks input
+    // MÉTODO 1: Verificar si el trigger está presionado
+    try {
+      if (xb.core?.session?.inputSources) {
+        for (const source of xb.core.session.inputSources) {
+          if (source.gamepad) {
+            // El trigger es el primer botón (índice 0)
+            if (source.gamepad.buttons[0]?.pressed) {
+              console.log("🎮 TRIGGER PRESIONADO!");
+              touchDetected = true;
+              break;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Error verificando trigger:", e.message);
+    }
+
+    // MÉTODO 2: Verificar pinch/grip (squeeze)
+    try {
+      if (xb.core?.session?.inputSources) {
+        for (const source of xb.core.session.inputSources) {
+          // Mano izquierda o derecha haciendo pinch
+          if (source.hand) {
+            const indexFingerTip = source.hand.get('index-finger-tip');
+            const thumbTip = source.hand.get('thumb-tip');
+            
+            if (indexFingerTip && thumbTip) {
+              // Calcular distancia entre índice y pulgar
+              const indexPos = indexFingerTip.position;
+              const thumbPos = thumbTip.position;
+              
+              if (indexPos && thumbPos) {
+                const distX = indexPos[0] - thumbPos[0];
+                const distY = indexPos[1] - thumbPos[1];
+                const distZ = indexPos[2] - thumbPos[2];
+                const dist = Math.sqrt(distX*distX + distY*distY + distZ*distZ);
+                
+                // Si están a menos de 2cm, es un pinch
+                if (dist < 0.02) {
+                  console.log("✋ PINCH DETECTADO!");
+                  touchDetected = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Error verificando pinch:", e.message);
+    }
+
+    // MÉTODO 3: Verificar proximidad de controlador al cubo
     try {
       if (xb.core?.input?.controllers) {
         for (const controller of xb.core.input.controllers) {
           if (!controller) continue;
 
           const ctrlPos = new THREE.Vector3();
-          if (controller.getWorldPosition) {
+          if (typeof controller.getWorldPosition === 'function') {
             controller.getWorldPosition(ctrlPos);
           } else if (controller.position) {
             ctrlPos.copy(controller.position);
           }
           
           const dist = ctrlPos.distanceTo(markerWorldPos);
+          
+          // 25cm de rango
           if (dist < 0.25) {
             touchDetected = true;
             break;
@@ -557,44 +608,8 @@ class MaintenanceApp extends xb.Script {
       }
     } catch (e) {}
 
-    // ESTRATEGIA 2: Acceso directo a la sesión WebXR
-    try {
-      if (!touchDetected && xb.core?.session?.inputSources) {
-        for (const source of xb.core.session.inputSources) {
-          if (source?.gripSpace) {
-            const gripPos = new THREE.Vector3();
-            // Intentar obtener pose del grip space
-            const pose = xb.core.frame?.getPose(source.gripSpace, xb.core.refSpace);
-            if (pose?.transform?.position) {
-              gripPos.copy(pose.transform.position);
-              const dist = gripPos.distanceTo(markerWorldPos);
-              if (dist < 0.25) {
-                touchDetected = true;
-                break;
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {}
-
-    // ESTRATEGIA 3: Buscar en la escena
-    try {
-      if (!touchDetected && xb.core?.scene) {
-        xb.core.scene.traverse((obj) => {
-          if (obj.name?.includes('controller') || obj.name?.includes('hand')) {
-            const objPos = new THREE.Vector3();
-            obj.getWorldPosition(objPos);
-            const dist = objPos.distanceTo(markerWorldPos);
-            if (dist < 0.25) {
-              touchDetected = true;
-            }
-          }
-        });
-      }
-    } catch (e) {}
-
     if (touchDetected) {
+      console.log("✅ TOQUE CONFIRMADO -> triggerSuccess()");
       this.triggerSuccess();
     }
   }
