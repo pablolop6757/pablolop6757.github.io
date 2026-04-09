@@ -144,51 +144,92 @@ class MaintenanceApp extends xb.Script {
 
     // INICIAR LOOP DE DETECCIÓN INDEPENDIENTE
     this.startTouchDetectionLoop();
+    
+    // ESCUCHAR EVENTOS DE SELECCIÓN (alternativa a polling)
+    this.setupSelectionListeners();
+  }
+
+  setupSelectionListeners() {
+    // Escuchar eventos de controlador para Meta Quest
+    this.addEventListener('selectstart', (e) => {
+      console.log("SELECT START en marker:", e);
+      if (this.marker && this.marker.visible) {
+        this.triggerSuccess();
+      }
+    });
+
+    // También intentar listeners en el documento
+    try {
+      document.addEventListener('selectstart', (e) => {
+        console.log("Document selectstart");
+        if (this.marker && this.marker.visible) {
+          this.triggerSuccess();
+        }
+      });
+    } catch (e) {}
+
+    // Y en el marker directamente
+    try {
+      this.marker?.addEventListener('selectstart', () => {
+        console.log("Marker selectstart directo");
+        this.triggerSuccess();
+      });
+    } catch (e) {}
   }
 
   startTouchDetectionLoop() {
-    // Loop independiente usando requestAnimationFrame
-    const loop = () => {
-      try {
-        this.updateDebugDisplay();
-        this.checkForTouch();
+    // Usar setInterval en lugar de requestAnimationFrame
+    console.log("🚀 Touch detection loop iniciado");
+    
+    let frameCount = 0;
 
-        // Animar el cubo
-        if (this.marker && this.marker.visible) {
+    setInterval(() => {
+      try {
+        frameCount++;
+
+        // Actualizar el cubo cada frame
+        if (this.marker && this.marker.visible && this.isWaitingForInteraction) {
           const now = performance.now();
+          
+          // Rotación
           this.marker.rotation.y += 0.02;
           this.marker.rotation.x += 0.01;
-          this.marker.scale.setScalar(1.0 + Math.sin(now * 0.005) * 0.1);
+          
+          // Animación de tamaño con pulso obvia
+          const pulse = Math.sin(frameCount * 0.2) * 0.15 + 1.0;
+          this.marker.scale.setScalar(pulse);
+        }
+
+        // Actualizar debug cada 3 frames (10 veces por segundo aprox)
+        if (frameCount % 3 === 0) {
+          this.updateDebugDisplay();
+          this.checkForTouch();
         }
       } catch (e) {
-        console.error("Error en touch loop:", e);
+        console.error("🔥 Error en loop:", e.message);
       }
-
-      requestAnimationFrame(loop);
-    };
-
-    requestAnimationFrame(loop);
+    }, 30); // 30ms = ~33fps
   }
 
   createDebugPanel() {
     // Panel pequeño para debugging visual
     const debugPanel = new xb.SpatialPanel({
-      width: 0.5,
-      height: 0.3,
+      width: 0.6,
+      height: 0.4,
       backgroundColor: '#1a1a1a'
     });
     
-    debugPanel.position.set(0.5, 0.8, -1.2);
+    debugPanel.position.set(0.6, 0.8, -1.2);
     this.add(debugPanel);
 
     const grid = debugPanel.addGrid();
     this.debugText = grid.addRow({weight: 1}).addText({
-      text: 'DEBUG',
+      text: 'Inicializando...',
       fontColor: '#ffff00',
-      fontSize: 0.035
+      fontSize: 0.04
     });
     
-    this.debugUpdateFlag = 0;
+    this.debugPanel = debugPanel;
   }
 
   createInstructionPanel() {
@@ -376,61 +417,113 @@ class MaintenanceApp extends xb.Script {
   }
 
   updateDebugDisplay() {
-    if (!this.debugText) return;
+    if (!this.debugText || !this.debugPanel) return;
 
-    let debugInfo = "SISTEMA DEBUG\n";
+    let debugInfo = "🔍 DEBUG INFO\n";
     
     try {
-      // Info básica
+      // Información del sistema
       const hasMarker = this.marker ? "✓" : "✗";
       const isWaiting = this.isWaitingForInteraction ? "✓" : "✗";
-      
-      debugInfo += `Marker: ${hasMarker} Wait: ${isWaiting}\n`;
+      debugInfo += `Marker:${hasMarker} Wait:${isWaiting}\n`;
 
-      // Contar controladores
-      let controllerCount = 0;
-      
-      if (xb.core.input?.controllers) {
-        controllerCount = xb.core.input.controllers.length;
+      // INVESTIGAR xb.core
+      let coreInfo = [];
+      if (xb.core) {
+        if (xb.core.input) coreInfo.push("input✓");
+        if (xb.core.session) coreInfo.push("session✓");
+        if (xb.core.renderer) coreInfo.push("render✓");
+        if (xb.core.user) coreInfo.push("user✓");
       }
       
-      debugInfo += `Controllers: ${controllerCount}\n`;
+      debugInfo += `Core: ${coreInfo.join(" ")}\n`;
 
-      // Distancia si hay cubo
-      if (this.marker && this.marker.visible) {
-        const markerPos = new THREE.Vector3();
-        this.marker.getWorldPosition(markerPos);
-        
-        let minDist = Infinity;
-        
-        if (xb.core.input?.controllers) {
+      // Contar controllers de varias formas
+      let ctrlInfo = "Ctrl:0";
+      try {
+        if (xb.core?.input?.controllers) {
+          ctrlInfo = `Ctrl:${xb.core.input.controllers.length}`;
+        }
+      } catch (e) {}
+
+      debugInfo += ctrlInfo;
+
+      // Mostrar distancia si hay controllers
+      if (this.marker?.visible) {
+        try {
+          let minDist = 999;
+          let found = false;
+
+          if (xb.core?.input?.controllers) {
+            const markerPos = new THREE.Vector3();
+            this.marker.getWorldPosition(markerPos);
+            
+            for (const ctrl of xb.core.input.controllers) {
+              if (ctrl) {
+                found = true;
+                const ctrlPos = new THREE.Vector3();
+                if (typeof ctrl.getWorldPosition === 'function') {
+                  ctrl.getWorldPosition(ctrlPos);
+                } else if (ctrl.position) {
+                  ctrlPos.copy(ctrl.position);
+                }
+                const dist = ctrlPos.distanceTo(markerPos);
+                minDist = Math.min(minDist, dist);
+              }
+            }
+          }
+
+          if (found) {
+            debugInfo += ` D:${(minDist * 100).toFixed(0)}cm`;
+          }
+        } catch (e) {}
+      }
+    } catch (e) {
+      debugInfo += `\nERROR: ${e.message.substring(0, 25)}`;
+    }
+
+    // Actualizar texto
+    this.debugText.setText(debugInfo);
+    try {
+      this.debugPanel.updateLayouts();
+    } catch (e) {}
+
+    // COLOR DEL CUBO
+    if (this.marker && this.markerMaterial) {
+      this.markerMaterial.color.setHex(0xff0000); // Rojo por defecto (sin detectar)
+      
+      try {
+        if (xb.core?.input?.controllers?.length > 0) {
+          this.markerMaterial.color.setHex(0xffff00); // Amarillo si hay controllers
+          
+          const markerPos = new THREE.Vector3();
+          this.marker.getWorldPosition(markerPos);
+          
           for (const ctrl of xb.core.input.controllers) {
             if (ctrl) {
               const ctrlPos = new THREE.Vector3();
-              if (ctrl.getWorldPosition) {
+              if (typeof ctrl.getWorldPosition === 'function') {
                 ctrl.getWorldPosition(ctrlPos);
               } else if (ctrl.position) {
                 ctrlPos.copy(ctrl.position);
               }
               const dist = ctrlPos.distanceTo(markerPos);
-              minDist = Math.min(minDist, dist);
+              
+              if (dist < 0.25) {
+                this.markerMaterial.color.setHex(0x00ff00); // Verde si toque
+                break;
+              }
             }
           }
         }
-        
-        if (minDist < Infinity) {
-          debugInfo += `Dist: ${(minDist * 100).toFixed(0)}cm`;
-        }
-      }
-
-      this.debugText.setText(debugInfo);
-    } catch (e) {
-      this.debugText.setText("ERROR\n" + e.message.substring(0, 30));
+      } catch (e) {}
     }
   }
 
   checkForTouch() {
-    if (!this.marker || !this.marker.visible) return;
+    if (!this.marker || !this.marker.visible || !this.isWaitingForInteraction) {
+      return;
+    }
 
     const now = performance.now();
     if (now - this.lastInteractionTime < 1500) {
@@ -442,9 +535,9 @@ class MaintenanceApp extends xb.Script {
 
     let touchDetected = false;
 
-    // Buscar controladores y verificar distancia
+    // ESTRATEGIA 1: Acceso a XR Blocks input
     try {
-      if (xb.core.input?.controllers && Array.isArray(xb.core.input.controllers)) {
+      if (xb.core?.input?.controllers) {
         for (const controller of xb.core.input.controllers) {
           if (!controller) continue;
 
@@ -456,23 +549,50 @@ class MaintenanceApp extends xb.Script {
           }
           
           const dist = ctrlPos.distanceTo(markerWorldPos);
-          
-          // 25cm de rango
           if (dist < 0.25) {
-            touchDetected = true;
-            break;
-          }
-
-          // Intentar raycasting también
-          if (this.performRaycastFromController(controller)) {
             touchDetected = true;
             break;
           }
         }
       }
-    } catch (e) {
-      // Error silencioso
-    }
+    } catch (e) {}
+
+    // ESTRATEGIA 2: Acceso directo a la sesión WebXR
+    try {
+      if (!touchDetected && xb.core?.session?.inputSources) {
+        for (const source of xb.core.session.inputSources) {
+          if (source?.gripSpace) {
+            const gripPos = new THREE.Vector3();
+            // Intentar obtener pose del grip space
+            const pose = xb.core.frame?.getPose(source.gripSpace, xb.core.refSpace);
+            if (pose?.transform?.position) {
+              gripPos.copy(pose.transform.position);
+              const dist = gripPos.distanceTo(markerWorldPos);
+              if (dist < 0.25) {
+                touchDetected = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {}
+
+    // ESTRATEGIA 3: Buscar en la escena
+    try {
+      if (!touchDetected && xb.core?.scene) {
+        xb.core.scene.traverse((obj) => {
+          if (obj.name?.includes('controller') || obj.name?.includes('hand')) {
+            const objPos = new THREE.Vector3();
+            obj.getWorldPosition(objPos);
+            const dist = objPos.distanceTo(markerWorldPos);
+            if (dist < 0.25) {
+              touchDetected = true;
+            }
+          }
+        });
+      }
+    } catch (e) {}
 
     if (touchDetected) {
       this.triggerSuccess();
