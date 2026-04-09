@@ -157,129 +157,124 @@ class MaintenanceApp extends xb.Script {
   createDebugPanel() {
     // Panel grande y visible para debugging
     const debugPanel = new xb.SpatialPanel({
-      width: 1.0,
-      height: 0.8,
-      backgroundColor: '#000000aa'
+      width: 1.2,
+      height: 1.0,
+      backgroundColor: '#1a1a1add'
     });
     
-    debugPanel.position.set(0.8, 1.0, -1.0);
+    debugPanel.position.set(-0.9, 0.8, -0.8);
+    debugPanel.rotation.y = 0.3;
     this.add(debugPanel);
 
     const grid = debugPanel.addGrid();
     
-    this.debugText = grid.addRow({weight: 1}).addText({
-      text: 'INICIALIZANDO DEBUG',
+    this.debugRow1 = grid.addRow({weight: 0.2}).addText({
+      text: 'INICIALIZANDO...',
+      fontColor: '#ffff00',
+      fontSize: 0.05
+    });
+
+    this.debugRow2 = grid.addRow({weight: 0.3}).addText({
+      text: '...',
+      fontColor: '#ffffff',
+      fontSize: 0.04
+    });
+
+    this.debugRow3 = grid.addRow({weight: 0.3}).addText({
+      text: '...',
+      fontColor: '#ffffff',
+      fontSize: 0.04
+    });
+
+    this.debugRow4 = grid.addRow({weight: 0.2}).addText({
+      text: '...',
       fontColor: '#00ff00',
       fontSize: 0.04
     });
     
     this.debugPanel = debugPanel;
+    this.debugPanelReady = true;
   }
 
   startDebugUpdater() {
+    console.log("DEBUG UPDATER INICIADO");
+    
     setInterval(() => {
-      this.updateDebugPanel();
-    }, 100); // Actualizar cada 100ms
+      try {
+        this.updateDebugPanel();
+      } catch (e) {
+        console.error("Error en updateDebugPanel:", e);
+      }
+    }, 100);
   }
 
   updateDebugPanel() {
-    if (!this.debugText) return;
-
-    let info = "🔍 DEBUG QUEST\n";
-    info += "─────────────────\n";
-
-    // Verificar xb.core disponible
-    if (!xb.core) {
-      info += "❌ xb.core no disponible\n";
-      this.debugText.setText(info);
-      return;
-    }
-
-    // Información de sesión
-    const hasSession = !!xb.core.session;
-    const hasRenderer = !!xb.core.renderer;
-    const hasXR = !!xb.core.renderer?.xr;
-    
-    info += `Session: ${hasSession ? "✓" : "✗"}\n`;
-    info += `Renderer: ${hasRenderer ? "✓" : "✗"}\n`;
-    info += `XR: ${hasXR ? "✓" : "✗"}\n`;
-    info += "─────────────────\n";
-
-    // InputSources
-    let inputSourceCount = 0;
-    let triggerPressed = false;
-    let gripPressed = false;
+    if (!this.debugPanelReady) return;
 
     try {
-      // Intentar acceder de múltiples formas
-      let session = null;
+      if (!this.debugRow1) return;
 
-      if (xb.core.session) {
-        session = xb.core.session;
-      } else if (xb.core.renderer?.xr?.getSession) {
-        session = xb.core.renderer.xr.getSession();
+      // Línea 1: Estado general
+      let line1 = "SYSTEM";
+      this.debugRow1.setText(line1);
+
+      // Línea 2-3: Input Sources y botones
+      let line2 = "Inputs: ?";
+      let line3 = "Status: ?";
+
+      try {
+        let session = null;
+        
+        // Intenta múltiples formas de acceder a la sesión
+        if (xb.core && xb.core.session) {
+          session = xb.core.session;
+        } else if (xb.core && xb.core.renderer && xb.core.renderer.xr && xb.core.renderer.xr.getSession) {
+          session = xb.core.renderer.xr.getSession();
+        }
+
+        if (session && session.inputSources) {
+          const numSources = session.inputSources.length;
+          line2 = "Inputs: " + numSources;
+
+          line3 = "Status: ";
+          
+          for (let i = 0; i < numSources; i++) {
+            try {
+              const source = session.inputSources[i];
+              const isHand = source.hand ? "H" : "C";
+              const trigger = source.gamepad && source.gamepad.buttons && source.gamepad.buttons[0] && source.gamepad.buttons[0].pressed ? "T" : " ";
+              const grip = source.gamepad && source.gamepad.buttons && source.gamepad.buttons[1] && source.gamepad.buttons[1].pressed ? "G" : " ";
+              
+              line3 += "[" + isHand + trigger + grip + "]";
+            } catch (e) {}
+          }
+        } else {
+          line2 = "Inputs: NONE";
+        }
+      } catch (e) {
+        line2 = "Inputs: ERROR";
+        line3 = "Error: " + e.toString().substring(0, 20);
       }
 
-      if (session?.inputSources) {
-        inputSourceCount = session.inputSources.length;
-        info += `InputSources: ${inputSourceCount}\n`;
+      if (this.debugRow2) this.debugRow2.setText(line2);
+      if (this.debugRow3) this.debugRow3.setText(line3);
 
-        // Revisar estado de botones
-        for (let i = 0; i < session.inputSources.length; i++) {
-          const source = session.inputSources[i];
-          
-          if (source.gamepad?.buttons) {
-            const triggerBtn = source.gamepad.buttons[0];
-            const gripBtn = source.gamepad.buttons[1];
-
-            if (triggerBtn?.pressed) {
-              triggerPressed = true;
-              info += `  [${i}] 🎮 TRIGGER!\n`;
-            }
-            if (gripBtn?.pressed) {
-              gripPressed = true;
-              info += `  [${i}] 👊 GRIP!\n`;
-            }
-
-            if (!triggerBtn?.pressed && !gripBtn?.pressed) {
-              info += `  [${i}] Idle\n`;
-            }
-          } else {
-            info += `  [${i}] Sin gamepad\n`;
-          }
+      // Línea 4: Estado del cubo
+      let line4 = "Cubo: ";
+      if (this.marker && this.marker.visible) {
+        line4 += "OK";
+        if (this.isWaitingForInteraction) {
+          line4 += " | Listo";
         }
       } else {
-        info += "❌ Sin inputSources\n";
+        line4 += "NO";
       }
+      
+      if (this.debugRow4) this.debugRow4.setText(line4);
+
     } catch (e) {
-      info += `❌ Error: ${e.message.substring(0, 30)}\n`;
+      console.error("Error en updateDebugPanel:", e);
     }
-
-    info += "─────────────────\n";
-    
-    // Estado del cubo
-    const cuboVisible = this.marker?.visible ? "✓" : "✗";
-    const esperandoInteraccion = this.isWaitingForInteraction ? "✓" : "✗";
-    
-    info += `Cubo: ${cuboVisible}\n`;
-    info += `Esperando: ${esperandoInteraccion}\n`;
-
-    // Estado combinado
-    if (inputSourceCount > 0 && (triggerPressed || gripPressed)) {
-      info += "\n🟢 LISTO PARA ACTIVAR";
-      this.debugText.options.fontColor = '#00ff00';
-    } else if (inputSourceCount > 0) {
-      info += "\n🟡 Controladores OK";
-      this.debugText.options.fontColor = '#ffff00';
-    } else {
-      info += "\n🔴 Sin controladores";
-      this.debugText.options.fontColor = '#ff0000';
-    }
-
-    this.debugText.setText(info);
-    try {
-      this.debugPanel.updateLayouts();
-    } catch (e) {}
   }
 
   diagnosticXRCore() {
@@ -387,12 +382,8 @@ class MaintenanceApp extends xb.Script {
     // Polling continuo para ver si el trigger está presionado
     console.log("🏁 setupCubeInteraction iniciado");
     
-    let pollingAttempts = 0;
-
     const pollingLoop = setInterval(() => {
       try {
-        pollingAttempts++;
-
         if (!this.marker || !this.marker.visible || !this.isWaitingForInteraction) {
           return;
         }
@@ -404,46 +395,25 @@ class MaintenanceApp extends xb.Script {
 
         let triggerDetected = false;
 
-        // OPCIÓN 1: Acceder via xb.core.session.inputSources
+        // OPCIÓN 1: xb.core.session.inputSources
         try {
           if (xb.core?.session?.inputSources) {
             for (const source of xb.core.session.inputSources) {
-              if (source.gamepad?.buttons) {
-                const triggerButton = source.gamepad.buttons[0]; // Index trigger
-                const gripButton = source.gamepad.buttons[1];     // Grip
-                
-                if (triggerButton?.pressed) {
-                  console.log("✅ TRIGGER PRESIONADO (xb.core.session)");
-                  triggerDetected = true;
-                  break;
-                }
-                
-                if (gripButton?.pressed) {
-                  console.log("✅ GRIP PRESIONADO (xb.core.session)");
-                  triggerDetected = true;
-                  break;
-                }
+              if (source.gamepad?.buttons?.[0]?.pressed) {
+                console.log("✅ TRIGGER DETECTADO (xb.core.session)");
+                triggerDetected = true;
+                break;
+              }
+              if (source.gamepad?.buttons?.[1]?.pressed) {
+                console.log("✅ GRIP DETECTADO (xb.core.session)");
+                triggerDetected = true;
+                break;
               }
             }
           }
         } catch (e) {}
 
-        // OPCIÓN 2: Acceder via xb.core.frame (WebXR Frame)
-        if (!triggerDetected) {
-          try {
-            if (xb.core?.frame?.session?.inputSources) {
-              for (const source of xb.core.frame.session.inputSources) {
-                if (source.gamepad?.buttons?.[0]?.pressed) {
-                  console.log("✅ TRIGGER PRESIONADO (xb.core.frame.session)");
-                  triggerDetected = true;
-                  break;
-                }
-              }
-            }
-          } catch (e) {}
-        }
-
-        // OPCIÓN 3: Acceder via xb.core.renderer.xr
+        // OPCIÓN 2: xb.core.renderer.xr.getSession()
         if (!triggerDetected) {
           try {
             if (xb.core?.renderer?.xr?.getSession) {
@@ -451,7 +421,12 @@ class MaintenanceApp extends xb.Script {
               if (session?.inputSources) {
                 for (const source of session.inputSources) {
                   if (source.gamepad?.buttons?.[0]?.pressed) {
-                    console.log("✅ TRIGGER PRESIONADO (xb.core.renderer.xr)");
+                    console.log("✅ TRIGGER DETECTADO (renderer.xr)");
+                    triggerDetected = true;
+                    break;
+                  }
+                  if (source.gamepad?.buttons?.[1]?.pressed) {
+                    console.log("✅ GRIP DETECTADO (renderer.xr)");
                     triggerDetected = true;
                     break;
                   }
@@ -461,13 +436,25 @@ class MaintenanceApp extends xb.Script {
           } catch (e) {}
         }
 
-        if (triggerDetected) {
-          this.triggerSuccess();
+        // OPCIÓN 3: xb.core.frame
+        if (!triggerDetected) {
+          try {
+            const frame = xb.core?.frame;
+            if (frame?.session?.inputSources) {
+              for (const source of frame.session.inputSources) {
+                if (source.gamepad?.buttons?.[0]?.pressed) {
+                  console.log("✅ TRIGGER DETECTADO (frame.session)");
+                  triggerDetected = true;
+                  break;
+                }
+              }
+            }
+          } catch (e) {}
         }
 
-        // Log cada 100 intentos para diagnosticar
-        if (pollingAttempts % 100 === 0) {
-          console.log(`⏱️ Polling activo - ${pollingAttempts} intentos, xb.core.session: ${!!xb.core?.session}`);
+        if (triggerDetected) {
+          console.log("🎯 Llamando triggerSuccess()");
+          this.triggerSuccess();
         }
 
       } catch (e) {
@@ -475,7 +462,6 @@ class MaintenanceApp extends xb.Script {
       }
     }, 50); // Revisar cada 50ms
 
-    // Guardar el intervalo por si queremos cancelarlo después
     this.pollingLoop = pollingLoop;
   }
 
@@ -559,6 +545,28 @@ class MaintenanceApp extends xb.Script {
         (-center.y * scale) + 1.0, 
         (-center.z * scale) - 1.0 
       );
+
+      // HACER EL MODELO MÁS SÓLIDO Y OPACO
+      this.panelModel.traverse((child) => {
+        if (child.isMesh && child.material) {
+          // Aumentar opacidad
+          if (child.material.opacity !== undefined) {
+            child.material.opacity = 1.0;
+          }
+          
+          // Desactivar transparencia
+          if (child.material.transparent !== undefined) {
+            child.material.transparent = false;
+          }
+          
+          // Activar renderOrder para evitar z-fighting
+          child.renderOrder = 1;
+          
+          // Hacer castShadow y receiveShadow
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
       
       this.add(this.panelModel);
     } catch (error) {
