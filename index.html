@@ -136,123 +136,80 @@ class MaintenanceApp extends xb.Script {
     this.add(dirLight);
 
     this.createInstructionPanel();
-    this.createDebugPanel();
     await this.loadElectricalPanel();
     this.createInteractionMarker();
 
     this.updateStepUI();
 
-    // INICIAR LOOP DE DETECCIÓN INDEPENDIENTE
-    this.startTouchDetectionLoop();
-    
-    // ESCUCHAR EVENTOS DE SELECCIÓN/TRIGGER
-    this.setupInputListeners();
+    // ESCUCHAR CLICS/TRIGGERS VIARAYCASTING
+    this.setupClickHandling();
   }
 
-  setupInputListeners() {
-    // Esperar a que la sesión WebXR esté lista
+  setupClickHandling() {
+    // Método universal: escuchar XRSession select eventos
     setTimeout(() => {
       try {
         if (xb.core?.session) {
-          console.log("✅ Sesión XR detectada, configurando listeners");
-          
-          // Escuchar selectstart (trigger principal)
           xb.core.session.addEventListener('selectstart', (event) => {
-            console.log("🎮 TRIGGER DETECTADO!");
-            this.handleInputEvent(event);
+            console.log("✅ SELECT START detectado en el navegador XR");
+            this.handleSelectStart(event);
           });
-
-          // Para manos también
-          xb.core.session.addEventListener('squeeze', (event) => {
-            console.log("✋ PINCH DETECTADO!");
-            this.handleInputEvent(event);
+          
+          xb.core.session.addEventListener('selectend', (event) => {
+            console.log("✅ SELECT END detectado");
           });
-
-          // Try to add listeners to inputsources
-          for (const source of xb.core.session.inputSources || []) {
-            source.addEventListener?.('selectstart', (event) => {
-              console.log("📍 Source selectstart");
-              this.handleInputEvent(event);
-            });
-          }
         }
       } catch (e) {
-        console.error("Error configurando listeners:", e);
+        console.error("Error configurando select listeners:", e);
       }
-    }, 500); // Esperar 500ms a que se inicialice
+    }, 1000);
 
-    // También escuchar en el documento por si acaso
-    document.addEventListener('selectstart', (e) => {
-      console.log("📄 Document selectstart");
-      this.handleInputEvent(e);
+    // También escuchar clicks 2D del ratón (para testing en navegador)
+    window.addEventListener('click', (event) => {
+      console.log("Mouse click detectado");
+      this.handleMouseClick(event);
+    });
+
+    // Escuchar también en 'select' genérico
+    window.addEventListener('select', () => {
+      console.log("Select genérico");
     });
   }
 
-  handleInputEvent(event) {
-    console.log("handleInputEvent llamado:", event);
+  handleSelectStart(event) {
+    console.log("handleSelectStart llamado, event:", event);
     
-    if (this.marker && this.marker.visible && this.isWaitingForInteraction) {
-      const now = performance.now();
-      if (now - this.lastInteractionTime > 1500) {
-        console.log("✅ TRIGGER -> triggerSuccess");
-        this.triggerSuccess();
-      }
+    if (!this.marker || !this.marker.visible || !this.isWaitingForInteraction) {
+      console.log("No hay cubo visible o no está esperando interacción");
+      return;
     }
+
+    const now = performance.now();
+    if (now - this.lastInteractionTime < 1500) {
+      console.log("Anti-spam activo");
+      return;
+    }
+
+    console.log("✅ ¡TRIGGER PROCESADO! Llamando triggerSuccess");
+    this.triggerSuccess();
   }
 
-  startTouchDetectionLoop() {
-    // Usar setInterval en lugar de requestAnimationFrame
-    console.log("🚀 Touch detection loop iniciado");
-    
-    let frameCount = 0;
+  handleMouseClick(event) {
+    if (!this.marker || !this.marker.visible || !this.isWaitingForInteraction) {
+      return;
+    }
 
-    setInterval(() => {
-      try {
-        frameCount++;
+    // Raycasting desde la cámara
+    this.pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+    this.pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-        // Actualizar el cubo cada frame
-        if (this.marker && this.marker.visible && this.isWaitingForInteraction) {
-          const now = performance.now();
-          
-          // Rotación
-          this.marker.rotation.y += 0.02;
-          this.marker.rotation.x += 0.01;
-          
-          // Animación de tamaño con pulso obvia
-          const pulse = Math.sin(frameCount * 0.2) * 0.15 + 1.0;
-          this.marker.scale.setScalar(pulse);
-        }
+    this.raycaster.setFromCamera(this.pointer, xb.core.camera);
+    const intersects = this.raycaster.intersectObject(this.marker);
 
-        // Actualizar debug cada 3 frames (10 veces por segundo aprox)
-        if (frameCount % 3 === 0) {
-          this.updateDebugDisplay();
-          this.checkForTouch();
-        }
-      } catch (e) {
-        console.error("🔥 Error en loop:", e.message);
-      }
-    }, 30); // 30ms = ~33fps
-  }
-
-  createDebugPanel() {
-    // Panel pequeño para debugging visual
-    const debugPanel = new xb.SpatialPanel({
-      width: 0.6,
-      height: 0.4,
-      backgroundColor: '#1a1a1a'
-    });
-    
-    debugPanel.position.set(0.6, 0.8, -1.2);
-    this.add(debugPanel);
-
-    const grid = debugPanel.addGrid();
-    this.debugText = grid.addRow({weight: 1}).addText({
-      text: 'Inicializando...',
-      fontColor: '#ffff00',
-      fontSize: 0.04
-    });
-    
-    this.debugPanel = debugPanel;
+    if (intersects.length > 0) {
+      console.log("✅ Clic en el cubo detectado");
+      this.triggerSuccess();
+    }
   }
 
   createInstructionPanel() {
@@ -424,199 +381,17 @@ class MaintenanceApp extends xb.Script {
     }
   }
 
-  // MÉTODO 2: Raycasting desde los controladores (Quest)
-  performRaycastFromController(controller) {
-    if (!controller || !this.marker || !this.marker.visible) return false;
-
-    // Crear rayo desde el controlador apuntando adelante
-    const direction = new THREE.Vector3(0, 0, -1);
-    const worldDirection = direction.applyQuaternion(controller.quaternion);
-    
-    this.raycaster.ray.origin.copy(controller.position);
-    this.raycaster.ray.direction.copy(worldDirection);
-    
-    const intersects = this.raycaster.intersectObject(this.marker);
-    return intersects.length > 0;
-  }
-
-  updateDebugDisplay() {
-    if (!this.debugText || !this.debugPanel) return;
-
-    let debugInfo = "🔍 DEBUG\n";
-    let triggerPressed = false;
-    let pinchDetected = false;
-    let inputSourcesFound = 0;
-    
-    try {
-      // Información básica
-      const hasMarker = this.marker ? "✓" : "✗";
-      const isWaiting = this.isWaitingForInteraction ? "✓" : "✗";
-      debugInfo += `M:${hasMarker} W:${isWaiting}\n`;
-
-      // Verificar INPUT SOURCES
-      try {
-        if (xb.core?.session?.inputSources) {
-          for (const source of xb.core.session.inputSources) {
-            inputSourcesFound++;
-            
-            // Verificar trigger
-            if (source.gamepad?.buttons[0]?.pressed) {
-              triggerPressed = true;
-            }
-
-            // Verificar pinch
-            if (source.hand) {
-              const indexFingerTip = source.hand.get('index-finger-tip');
-              const thumbTip = source.hand.get('thumb-tip');
-              
-              if (indexFingerTip?.position && thumbTip?.position) {
-                const d = Math.hypot(
-                  indexFingerTip.position[0] - thumbTip.position[0],
-                  indexFingerTip.position[1] - thumbTip.position[1],
-                  indexFingerTip.position[2] - thumbTip.position[2]
-                );
-                if (d < 0.02) {
-                  pinchDetected = true;
-                }
-              }
-            }
-          }
-        }
-      } catch (e) {}
-
-      debugInfo += `Sources:${inputSourcesFound}\n`;
-      
-      if (triggerPressed) {
-        debugInfo += "🎮 TRIGGER!";
-      } else if (pinchDetected) {
-        debugInfo += "✋ PINCH!";
-      } else {
-        debugInfo += "⏳ Esperando...";
-      }
-
-    } catch (e) {
-      debugInfo += `\nERROR: ${e.message.substring(0, 20)}`;
-    }
-
-    // Actualizar texto
-    this.debugText.setText(debugInfo);
-    try {
-      this.debugPanel.updateLayouts();
-    } catch (e) {}
-
-    // CAMBIAR COLOR DEL CUBO basado en inputs
-    if (this.marker && this.markerMaterial) {
-      if (triggerPressed || pinchDetected) {
-        this.markerMaterial.color.setHex(0x00ff00); // Verde = trigger/pinch presionado
-      } else if (inputSourcesFound > 0) {
-        this.markerMaterial.color.setHex(0xffff00); // Amarillo = controllers detectados
-      } else {
-        this.markerMaterial.color.setHex(0xff0000); // Rojo = sin input sources
-      }
-    }
-  }
-
-  checkForTouch() {
-    if (!this.marker || !this.marker.visible || !this.isWaitingForInteraction) {
-      return;
-    }
-
-    const now = performance.now();
-    if (now - this.lastInteractionTime < 1500) {
-      return; // Anti-spam
-    }
-
-    const markerWorldPos = new THREE.Vector3();
-    this.marker.getWorldPosition(markerWorldPos);
-
-    let touchDetected = false;
-
-    // MÉTODO 1: Verificar si el trigger está presionado
-    try {
-      if (xb.core?.session?.inputSources) {
-        for (const source of xb.core.session.inputSources) {
-          if (source.gamepad) {
-            // El trigger es el primer botón (índice 0)
-            if (source.gamepad.buttons[0]?.pressed) {
-              console.log("🎮 TRIGGER PRESIONADO!");
-              touchDetected = true;
-              break;
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("Error verificando trigger:", e.message);
-    }
-
-    // MÉTODO 2: Verificar pinch/grip (squeeze)
-    try {
-      if (xb.core?.session?.inputSources) {
-        for (const source of xb.core.session.inputSources) {
-          // Mano izquierda o derecha haciendo pinch
-          if (source.hand) {
-            const indexFingerTip = source.hand.get('index-finger-tip');
-            const thumbTip = source.hand.get('thumb-tip');
-            
-            if (indexFingerTip && thumbTip) {
-              // Calcular distancia entre índice y pulgar
-              const indexPos = indexFingerTip.position;
-              const thumbPos = thumbTip.position;
-              
-              if (indexPos && thumbPos) {
-                const distX = indexPos[0] - thumbPos[0];
-                const distY = indexPos[1] - thumbPos[1];
-                const distZ = indexPos[2] - thumbPos[2];
-                const dist = Math.sqrt(distX*distX + distY*distY + distZ*distZ);
-                
-                // Si están a menos de 2cm, es un pinch
-                if (dist < 0.02) {
-                  console.log("✋ PINCH DETECTADO!");
-                  touchDetected = true;
-                  break;
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("Error verificando pinch:", e.message);
-    }
-
-    // MÉTODO 3: Verificar proximidad de controlador al cubo
-    try {
-      if (xb.core?.input?.controllers) {
-        for (const controller of xb.core.input.controllers) {
-          if (!controller) continue;
-
-          const ctrlPos = new THREE.Vector3();
-          if (typeof controller.getWorldPosition === 'function') {
-            controller.getWorldPosition(ctrlPos);
-          } else if (controller.position) {
-            ctrlPos.copy(controller.position);
-          }
-          
-          const dist = ctrlPos.distanceTo(markerWorldPos);
-          
-          // 25cm de rango
-          if (dist < 0.25) {
-            touchDetected = true;
-            break;
-          }
-        }
-      }
-    } catch (e) {}
-
-    if (touchDetected) {
-      console.log("✅ TOQUE CONFIRMADO -> triggerSuccess()");
-      this.triggerSuccess();
-    }
-  }
-
-  // El update() no se usa, el loop es independiente
+  // El update() sí se usa para animar el cubo
   update() {
     super.update();
+    
+    // Animar el cubo azul
+    if (this.marker && this.marker.visible) {
+      const now = performance.now();
+      this.marker.rotation.y += 0.02;
+      this.marker.rotation.x += 0.01;
+      this.marker.scale.setScalar(1.0 + Math.sin(now * 0.005) * 0.1);
+    }
   }
 }
 
