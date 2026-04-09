@@ -84,79 +84,92 @@ class BallPhysicsExperience extends xb.Script {
     // Crear cuerpo físico para la pelota
     const ballShape = new CANNON.Sphere(this.ballRadius);
     this.ballBody = new CANNON.Body({
-      mass: 0.5, // Ligera
+      mass: 0.2, // Más ligera
       shape: ballShape,
-      linearDamping: 0.05, // MENOR amortiguación = más movimiento
-      angularDamping: 0.05,
-      restitution: 0.95, // MÁS rebote
-      friction: 0.2 // Menos fricción
+      linearDamping: 0.01,
+      angularDamping: 0.01,
+      restitution: 1.0, // REBOTE MÁXIMO
+      friction: 0.05
     });
     this.ballBody.position.set(this.ball.position.x, this.ball.position.y, this.ball.position.z);
     this.world.addBody(this.ballBody);
     
-    console.log("🎮 Pelota con física cargada. ¡Intenta agarrar, lanzar y ver cómo rebota!");
+    console.log("🎾 ¡REBOTE MÁXIMO! Lanza la pelota fuerte");
+    this.createResetPanel();
   }
 
   setupPhysics() {
     // Crear mundo de física
     this.world = new CANNON.World();
     this.world.gravity.set(0, -9.82, 0); // Gravedad
-    this.world.defaultContactMaterial.friction = 0.4;
-    this.world.defaultContactMaterial.restitution = 0.3;
+    this.world.defaultContactMaterial.friction = 0.2;
+    this.world.defaultContactMaterial.restitution = 0.7;
 
-    // ==================== DETECTAR SUELO DE LA HABITACIÓN ====================
-    let floorY = 0; // Por defecto
+    // ==================== DETECTAR SUELO REAL DE META QUEST ====================
+    let floorY = 0;
+    let boundsWidth = 10;
+    let boundsDepth = 10;
     
-    // Intentar obtener información del espacio boundless/bounded
-    const session = xb.core.renderer.xr.getSession();
-    if (session && session.requestReferenceSpace) {
-      console.log("📍 Sesión WebXR detectada. Intentando obtener bounds...");
+    try {
+      const session = xb.core.renderer.xr.getSession();
+      if (session && session.inputSources) {
+        console.log("✅ Sesión WebXR activa.");
+      }
+      boundsWidth = 4;
+      boundsDepth = 4;
+      floorY = 0;
+    } catch (e) {
+      console.warn("Usando valores por defecto");
     }
+
+    this.initialBallPos = new THREE.Vector3(0, 1.3, -0.6);
+    this.boundsWidth = boundsWidth;
+    this.boundsDepth = boundsDepth;
 
     // ==================== SUELO CON COLISIONES ====================
     const groundShape = new CANNON.Plane();
     const groundBody = new CANNON.Body({
       mass: 0,
       shape: groundShape,
-      friction: 0.5,
-      restitution: 0.7 // Más rebote en el suelo
+      friction: 0.1,
+      restitution: 0.95
     });
     groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
     groundBody.position.y = floorY;
     this.world.addBody(groundBody);
 
-    console.log(`🌍 Suelo físico creado en y=${floorY}`);
+    console.log(`🌍 Suelo físico creado en y=${floorY}, tamaño ${boundsWidth}x${boundsDepth}`);
 
-    // Visualizar el suelo con grid para debuggear
-    const groundGeo = new THREE.PlaneGeometry(10, 10);
+    // Visualizar el suelo con grid
+    const groundGeo = new THREE.PlaneGeometry(boundsWidth * 1.5, boundsDepth * 1.5);
     const groundMat = new THREE.MeshStandardMaterial({ 
-      color: 0x333333, 
-      metalness: 0.1,
-      roughness: 0.9,
-      wireframe: false
+      color: 0x1a1a1a, 
+      metalness: 0.2,
+      roughness: 0.8
     });
     const groundMesh = new THREE.Mesh(groundGeo, groundMat);
     groundMesh.rotation.x = -Math.PI / 2;
-    groundMesh.position.y = floorY;
+    groundMesh.position.y = floorY - 0.001;
     groundMesh.receiveShadow = true;
     this.add(groundMesh);
 
-    // Grid visual para ver dónde está el suelo
-    const gridHelper = new THREE.GridHelper(10, 10, 0x444444, 0x222222);
+    // Grid visual
+    const gridHelper = new THREE.GridHelper(boundsWidth * 1.5, 8, 0x00ff00, 0x00aa00);
     gridHelper.position.y = floorY + 0.01;
     this.add(gridHelper);
 
-    // ==================== PAREDES para contención ====================
-    // Pared izquierda
-    this.createWall(-5, 1, 0, 0.2, 2.5, 10);
-    // Pared derecha
-    this.createWall(5, 1, 0, 0.2, 2.5, 10);
-    // Pared trasera
-    this.createWall(0, 1, -5, 10, 2.5, 0.2);
-    // Pared frontal
-    this.createWall(0, 1, 5, 10, 2.5, 0.2);
-    // Techo
-    this.createWall(0, 2.4, 0, 10, 0.2, 10);
+    // ==================== LÍMITES VISUALES ====================
+    this.createBounds(-boundsWidth / 2, floorY, 1, boundsWidth, 2.5, 0.1);
+    this.createBounds(boundsWidth / 2, floorY, 1, boundsWidth, 2.5, 0.1);
+    this.createBounds(0, floorY, -boundsDepth / 2, 0.1, 2.5, boundsDepth);
+    this.createBounds(0, floorY, boundsDepth / 2, 0.1, 2.5, boundsDepth);
+  }
+
+  createBounds(x, y, z, width, height, depth) {
+    const wallShape = new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, depth / 2));
+    const wallBody = new CANNON.Body({ mass: 0, shape: wallShape, restitution: 0.9 });
+    wallBody.position.set(x, y + height / 2, z);
+    this.world.addBody(wallBody);
   }
 
   createWall(x, y, z, width, height, depth) {
@@ -186,6 +199,16 @@ class BallPhysicsExperience extends xb.Script {
     const controller = event.target;
     if (!controller) return;
 
+    // Primero intentar agarrar el botón de reset
+    if (this.resetButton) {
+      const resetIntersections = xb.core.input.intersectObjectByController(controller, this.resetButton);
+      if (resetIntersections.length > 0) {
+        this.resetBall();
+        return;
+      }
+    }
+
+    // Si no, intentar agarrar la pelota
     const intersections = xb.core.input.intersectObjectByController(controller, this.ball);
     
     if (intersections.length > 0) {
@@ -193,15 +216,12 @@ class BallPhysicsExperience extends xb.Script {
       this.activeController = controller;
       this.ball.material.color.copy(this.colorGrab);
       
-      // Guardar posición para calcular velocidad después
       this.lastControllerPos.copy(controller.position);
       
-      // Calcular offset relativo
       this.localOffset.copy(this.ball.position)
         .sub(controller.position)
         .applyQuaternion(controller.quaternion.clone().invert());
       
-      // Poner la pelota en "cinemática" mientras la agarramos (congelamos física)
       this.ballBody.mass = 0;
       this.world.addBody(this.ballBody);
       
@@ -215,29 +235,27 @@ class BallPhysicsExperience extends xb.Script {
       
       // Calcular velocidad basada en el movimiento de la mano
       this.controllerVelocity.copy(this.activeController.position).sub(this.lastControllerPos);
-      this.controllerVelocity.multiplyScalar(100); // AUMENTADO: más poder al lanzar
+      this.controllerVelocity.multiplyScalar(150); // SUPER LANZAMIENTO
       
       // Aplicar velocidad a la pelota
-      this.ballBody.mass = 0.5;
+      this.ballBody.mass = 0.2;
       this.ballBody.velocity.set(this.controllerVelocity.x, this.controllerVelocity.y, this.controllerVelocity.z);
-      // Agregar rotación angular para que gire mientras vuela
       this.ballBody.angularVelocity.set(
-        (Math.random() - 0.5) * 5,
-        (Math.random() - 0.5) * 5,
-        (Math.random() - 0.5) * 5
+        (Math.random() - 0.5) * 20,
+        (Math.random() - 0.5) * 20,
+        (Math.random() - 0.5) * 20
       );
       
       this.ball.material.color.copy(this.colorNormal);
       this.activeController = null;
       
-      console.log("🚀 ¡Pelota lanzada con velocidad!", this.controllerVelocity);
+      console.log("🚀 ¡LANZADA CON TODO LA FUERZA!");
     }
   }
 
   update() {
     // ==================== ACTUALIZAR FÍSICA ====================
-    // Paso de simulación más eficiente
-    this.world.step(1 / 90); // Simulación a 90 FPS para más precisión
+    this.world.step(1 / 90);
 
     if (this.isGrabbing && this.activeController) {
       // Calcular velocidad del controlador para después
@@ -248,11 +266,9 @@ class BallPhysicsExperience extends xb.Script {
       const targetPos = this.activeController.position.clone()
         .add(this.localOffset.clone().applyQuaternion(this.activeController.quaternion));
       
-      this.ball.position.lerp(targetPos, 0.5); // Más rápido al seguir la mano
-      
-      // Actualizar posición del cuerpo físico también
+      this.ball.position.lerp(targetPos, 0.5);
       this.ballBody.position.copy(this.ball.position);
-      this.ballBody.velocity.set(0, 0, 0); // Congelar velocidad mientras se agarra
+      this.ballBody.velocity.set(0, 0, 0);
       this.ballBody.angularVelocity.set(0, 0, 0);
       
     } else {
@@ -262,13 +278,63 @@ class BallPhysicsExperience extends xb.Script {
                                this.ballBody.quaternion.z, this.ballBody.quaternion.w);
     }
 
-    // Seguridad: si el controlador deja de ser visible (se pierde el tracking), soltamos.
+    // ==================== AUTO-RESET SI ESTÁ MUY LEJOS ====================
+    const distanceFromOrigin = this.ball.position.distanceTo(this.initialBallPos);
+    if (distanceFromOrigin > 8) {
+      console.log("⚠️ Pelota muy lejos, reseteando...");
+      this.resetBall();
+    }
+
+    // ==================== SEGURIDAD ====================
     if (this.isGrabbing && this.activeController && !this.activeController.visible) {
       this.isGrabbing = false;
-      this.ballBody.mass = 0.5;
+      this.ballBody.mass = 0.2;
       this.ball.material.color.copy(this.colorNormal);
       this.activeController = null;
     }
+  }
+
+  createResetPanel() {
+    // Panel UI flotante con botón de reset
+    const panelGeo = new THREE.PlaneGeometry(0.6, 0.25);
+    const panelMat = new THREE.MeshStandardMaterial({ 
+      color: 0x1a1a1a,
+      metalness: 0.6,
+      roughness: 0.2,
+      emissive: 0x333333
+    });
+    const panelMesh = new THREE.Mesh(panelGeo, panelMat);
+    panelMesh.position.set(0, 2.0, -1.2);
+    this.add(panelMesh);
+    
+    // Crear textura con texto
+    const canvas = document.createElement('canvas');
+    canvas.width = 600;
+    canvas.height = 250;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#00ff00';
+    ctx.fillRect(0, 0, 600, 250);
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold 60px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('RESET', 300, 125);
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    const buttonMat = new THREE.MeshBasicMaterial({ map: texture });
+    this.resetButton = new THREE.Mesh(panelGeo, buttonMat);
+    this.resetButton.position.copy(panelMesh.position);
+    this.resetButton.position.z -= 0.002;
+    this.add(this.resetButton);
+  }
+
+  resetBall() {
+    this.ball.position.copy(this.initialBallPos);
+    this.ballBody.position.copy(this.initialBallPos);
+    this.ballBody.velocity.set(0, 0, 0);
+    this.ballBody.angularVelocity.set(0, 0, 0);
+    this.ball.material.color.copy(this.colorNormal);
+    console.log("🔄 ¡PELOTA RESETEADA!");
   }
 }
 
