@@ -19,7 +19,8 @@
           "lit": "https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js",
           "lit/": "https://esm.run/lit@3/",
           "xrblocks": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/xrblocks.js",
-          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/addons/"
+          "xrblocks/addons/": "https://cdn.jsdelivr.net/npm/xrblocks@0.11.0/build/addons/",
+          "cannon": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
         }
       }
     </script>
@@ -30,51 +31,129 @@
 import 'xrblocks/addons/simulator/SimulatorAddons.js';
 import * as THREE from 'three';
 import * as xb from 'xrblocks';
+import * as CANNON from 'cannon';
 
 /**
- * Versión mejorada con pelota más grande y agarre dinámico relativo.
+ * Pelota con física completa - rebota, rueda y se lanza.
  */
-class BallExperience extends xb.Script {
+class BallPhysicsExperience extends xb.Script {
   constructor() {
     super();
     this.ball = null;
+    this.ballBody = null;
     this.activeController = null;
     this.isGrabbing = false;
+    this.lastControllerPos = new THREE.Vector3();
+    this.controllerVelocity = new THREE.Vector3();
     
-    // Colores pre-definidos
+    // Colores
     this.colorNormal = new THREE.Color(0x00ffcc);
     this.colorGrab = new THREE.Color(0xffff00);
     
-    // Almacenamos la posición y rotación relativa al momento de agarrar
+    // Offset relativo
     this.localOffset = new THREE.Vector3();
+    
+    // Física
+    this.world = null;
+    this.ballRadius = 0.12;
   }
 
   init() {
-    // Añadimos luces para dar volumen a la pelota más grande
+    // ==================== FÍSICAS ====================
+    this.setupPhysics();
+    
+    // ==================== LUCES ====================
     this.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.5));
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
     dirLight.position.set(1, 2, 1);
     this.add(dirLight);
 
-    // Pelota más grande (radio 0.12 en lugar de 0.04) y con material reactivo a la luz
-    const geometry = new THREE.SphereGeometry(0.12, 32, 32);
+    // ==================== PELOTA ====================
+    const geometry = new THREE.SphereGeometry(this.ballRadius, 32, 32);
     const material = new THREE.MeshPhongMaterial({
       color: this.colorNormal,
       transparent: true,
       opacity: 0.9,
-      shininess: 60 // Añade un brillo para mejorar la percepción 3D
+      shininess: 60
     });
 
     this.ball = new THREE.Mesh(geometry, material);
-    this.ball.position.set(0, 1.3, -0.6); // Un poco más alejada para compensar el tamaño
+    this.ball.position.set(0, 1.3, -0.6);
     this.add(this.ball);
+
+    // Crear cuerpo físico para la pelota
+    const ballShape = new CANNON.Sphere(this.ballRadius);
+    this.ballBody = new CANNON.Body({
+      mass: 0.5, // Ligera
+      shape: ballShape,
+      linearDamping: 0.3,
+      angularDamping: 0.3,
+      restitution: 0.8 // Rebote (0-1, 1 es máximo rebote)
+    });
+    this.ballBody.position.set(this.ball.position.x, this.ball.position.y, this.ball.position.z);
+    this.world.addBody(this.ballBody);
     
-    console.log("Experiencia cargada. Intenta agarrar la pelota.");
+    console.log("🎮 Pelota con física cargada. ¡Intenta agarrar, lanzar y ver cómo rebota!");
   }
 
-  /**
-   * Identificamos el controlador y calculamos el "offset" para un agarre realista.
-   */
+  setupPhysics() {
+    // Crear mundo de física
+    this.world = new CANNON.World();
+    this.world.gravity.set(0, -9.82, 0); // Gravedad
+    this.world.defaultContactMaterial.friction = 0.4;
+    this.world.defaultContactMaterial.restitution = 0.3;
+
+    // ==================== SUELO ====================
+    const groundShape = new CANNON.Plane();
+    const groundBody = new CANNON.Body({
+      mass: 0,
+      shape: groundShape,
+      restitution: 0.5
+    });
+    groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+    groundBody.position.y = 0; // Piso en y=0
+    this.world.addBody(groundBody);
+
+    // Visualizar el suelo (opcional, pero útil para debugging)
+    const groundGeo = new THREE.PlaneGeometry(5, 5);
+    const groundMat = new THREE.MeshStandardMaterial({ 
+      color: 0x444444, 
+      metalness: 0.3,
+      roughness: 0.7
+    });
+    const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+    groundMesh.rotation.x = -Math.PI / 2;
+    groundMesh.position.y = 0;
+    groundMesh.receiveShadow = true;
+    this.add(groundMesh);
+
+    // ==================== PAREDES (opcional, para contener la pelota) ====================
+    this.createWall(-2.5, 1, 0, 0.1, 2, 5); // Pared izquierda
+    this.createWall(2.5, 1, 0, 0.1, 2, 5);  // Pared derecha
+    this.createWall(0, 1, -2.5, 5, 2, 0.1); // Pared trasera
+  }
+
+  createWall(x, y, z, width, height, depth) {
+    // Cuerpo físico
+    const wallShape = new CANNON.Box(new CANNON.Vec3(width / 2, height / 2, depth / 2));
+    const wallBody = new CANNON.Body({ mass: 0, shape: wallShape });
+    wallBody.position.set(x, y, z);
+    this.world.addBody(wallBody);
+
+    // Visualización (opcional)
+    const wallGeo = new THREE.BoxGeometry(width, height, depth);
+    const wallMat = new THREE.MeshStandardMaterial({ 
+      color: 0x666666, 
+      metalness: 0.2,
+      roughness: 0.8,
+      transparent: true,
+      opacity: 0.3
+    });
+    const wallMesh = new THREE.Mesh(wallGeo, wallMat);
+    wallMesh.position.set(x, y, z);
+    this.add(wallMesh);
+  }
+
   onSelectStart(event) {
     if (this.isGrabbing) return;
 
@@ -88,69 +167,93 @@ class BallExperience extends xb.Script {
       this.activeController = controller;
       this.ball.material.color.copy(this.colorGrab);
       
-      // Magia del agarre: calculamos la diferencia espacial entre la mano y la pelota 
-      // en este instante exacto para no "teletransportar" la pelota al centro de la mano.
+      // Guardar posición para calcular velocidad después
+      this.lastControllerPos.copy(controller.position);
+      
+      // Calcular offset relativo
       this.localOffset.copy(this.ball.position)
         .sub(controller.position)
         .applyQuaternion(controller.quaternion.clone().invert());
+      
+      // Poner la pelota en "cinemática" mientras la agarramos (congelamos física)
+      this.ballBody.mass = 0;
+      this.world.addBody(this.ballBody);
+      
+      console.log("✋ ¡Pelota agarrada!");
     }
   }
 
-  /**
-   * Liberamos la pelota.
-   */
   onSelectEnd(event) {
     if (this.isGrabbing && event.target === this.activeController) {
       this.isGrabbing = false;
-      this.activeController = null;
+      
+      // Calcular velocidad basada en el movimiento de la mano
+      this.controllerVelocity.copy(this.activeController.position).sub(this.lastControllerPos);
+      this.controllerVelocity.multiplyScalar(50); // Amplificar un poco la velocidad
+      
+      // Aplicar velocidad a la pelota
+      this.ballBody.mass = 0.5;
+      this.ballBody.velocity.set(this.controllerVelocity.x, this.controllerVelocity.y, this.controllerVelocity.z);
+      
       this.ball.material.color.copy(this.colorNormal);
+      this.activeController = null;
+      
+      console.log("🚀 ¡Pelota lanzada con velocidad!", this.controllerVelocity);
     }
   }
 
-  /**
-   * Actualizamos la posición suavemente (Lerp) respetando el agarre inicial.
-   */
   update() {
+    // ==================== ACTUALIZAR FÍSICA ====================
+    this.world.step(1 / 60); // 60 FPS
+
     if (this.isGrabbing && this.activeController) {
-      // 1. Calculamos a dónde debe ir la pelota basándonos en la posición de la mano + el offset inicial
+      // Calcular velocidad del controlador para después
+      this.controllerVelocity.copy(this.activeController.position).sub(this.lastControllerPos);
+      this.lastControllerPos.copy(this.activeController.position);
+      
+      // Mover la pelota con la mano (agarre)
       const targetPos = this.activeController.position.clone()
         .add(this.localOffset.clone().applyQuaternion(this.activeController.quaternion));
       
-      // 2. Interpolación lineal para el movimiento (0.4 lo hace más rápido y responsivo)
       this.ball.position.lerp(targetPos, 0.4);
       
-      // 3. Interpolación esférica para la rotación
-      this.ball.quaternion.slerp(this.activeController.quaternion, 0.2);
+      // Actualizar posición del cuerpo físico también
+      this.ballBody.position.set(this.ball.position.x, this.ball.position.y, this.ball.position.z);
+      
+    } else {
+      // Sincronizar la posición y rotación del mesh con el cuerpo de física
+      this.ball.position.set(this.ballBody.position.x, this.ballBody.position.y, this.ballBody.position.z);
+      this.ball.quaternion.set(this.ballBody.quaternion.x, this.ballBody.quaternion.y, 
+                               this.ballBody.quaternion.z, this.ballBody.quaternion.w);
     }
 
-    // Seguridad: si el controlador deja de ser visible (se pierde el tracking), soltamos.
+    // Seguridad
     if (this.isGrabbing && this.activeController && !this.activeController.visible) {
       this.isGrabbing = false;
-      this.activeController = null;
+      this.ballBody.mass = 0.5;
       this.ball.material.color.copy(this.colorNormal);
+      this.activeController = null;
     }
   }
 }
 
-// Configuración de entrada e inicio
+// ==================== INICIO ====================
 document.addEventListener('DOMContentLoaded', async function () {
   const options = new xb.Options();
   
   options.enableHands();
-  
-  // Desactivamos retículas si lo deseas por rendimiento, aunque con la pelota grande ayuda a apuntar.
-  options.enableReticles(); 
+  options.enableReticles();
   
   options.hands.visualization = true;
   options.hands.visualizeMeshes = true;
   
-  options.setAppTitle('Pelota Mejorada XR');
+  options.setAppTitle('🎾 Pelota con Física');
 
   try {
     await xb.init(options);
-    xb.add(new BallExperience());
+    xb.add(new BallPhysicsExperience());
   } catch (err) {
-    console.error("Fallo al iniciar:", err);
+    console.error("Error al iniciar:", err);
   }
 });
     </script>
