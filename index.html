@@ -136,80 +136,347 @@ class MaintenanceApp extends xb.Script {
     this.add(dirLight);
 
     this.createInstructionPanel();
+    this.createDebugPanel();
     await this.loadElectricalPanel();
     this.createInteractionMarker();
 
     this.updateStepUI();
 
-    // ESCUCHAR CLICS/TRIGGERS VIARAYCASTING
+    // ESCUCHAR CLICS/TRIGGERS VIA RAYCASTING
     this.setupClickHandling();
+    
+    // DIAGNOSTICAR xb.core
+    setTimeout(() => {
+      this.diagnosticXRCore();
+    }, 2000);
+
+    // ACTUALIZAR DEBUG PANEL CONTINUAMENTE
+    this.startDebugUpdater();
   }
 
-  setupClickHandling() {
-    // Método universal: escuchar XRSession select eventos
-    setTimeout(() => {
-      try {
-        if (xb.core?.session) {
-          xb.core.session.addEventListener('selectstart', (event) => {
-            console.log("✅ SELECT START detectado en el navegador XR");
-            this.handleSelectStart(event);
-          });
-          
-          xb.core.session.addEventListener('selectend', (event) => {
-            console.log("✅ SELECT END detectado");
-          });
-        }
-      } catch (e) {
-        console.error("Error configurando select listeners:", e);
+  createDebugPanel() {
+    // Panel grande y visible para debugging
+    const debugPanel = new xb.SpatialPanel({
+      width: 1.0,
+      height: 0.8,
+      backgroundColor: '#000000aa'
+    });
+    
+    debugPanel.position.set(0.8, 1.0, -1.0);
+    this.add(debugPanel);
+
+    const grid = debugPanel.addGrid();
+    
+    this.debugText = grid.addRow({weight: 1}).addText({
+      text: 'INICIALIZANDO DEBUG',
+      fontColor: '#00ff00',
+      fontSize: 0.04
+    });
+    
+    this.debugPanel = debugPanel;
+  }
+
+  startDebugUpdater() {
+    setInterval(() => {
+      this.updateDebugPanel();
+    }, 100); // Actualizar cada 100ms
+  }
+
+  updateDebugPanel() {
+    if (!this.debugText) return;
+
+    let info = "🔍 DEBUG QUEST\n";
+    info += "─────────────────\n";
+
+    // Verificar xb.core disponible
+    if (!xb.core) {
+      info += "❌ xb.core no disponible\n";
+      this.debugText.setText(info);
+      return;
+    }
+
+    // Información de sesión
+    const hasSession = !!xb.core.session;
+    const hasRenderer = !!xb.core.renderer;
+    const hasXR = !!xb.core.renderer?.xr;
+    
+    info += `Session: ${hasSession ? "✓" : "✗"}\n`;
+    info += `Renderer: ${hasRenderer ? "✓" : "✗"}\n`;
+    info += `XR: ${hasXR ? "✓" : "✗"}\n`;
+    info += "─────────────────\n";
+
+    // InputSources
+    let inputSourceCount = 0;
+    let triggerPressed = false;
+    let gripPressed = false;
+
+    try {
+      // Intentar acceder de múltiples formas
+      let session = null;
+
+      if (xb.core.session) {
+        session = xb.core.session;
+      } else if (xb.core.renderer?.xr?.getSession) {
+        session = xb.core.renderer.xr.getSession();
       }
-    }, 1000);
 
-    // También escuchar clicks 2D del ratón (para testing en navegador)
-    window.addEventListener('click', (event) => {
-      console.log("Mouse click detectado");
-      this.handleMouseClick(event);
-    });
+      if (session?.inputSources) {
+        inputSourceCount = session.inputSources.length;
+        info += `InputSources: ${inputSourceCount}\n`;
 
-    // Escuchar también en 'select' genérico
-    window.addEventListener('select', () => {
-      console.log("Select genérico");
-    });
+        // Revisar estado de botones
+        for (let i = 0; i < session.inputSources.length; i++) {
+          const source = session.inputSources[i];
+          
+          if (source.gamepad?.buttons) {
+            const triggerBtn = source.gamepad.buttons[0];
+            const gripBtn = source.gamepad.buttons[1];
+
+            if (triggerBtn?.pressed) {
+              triggerPressed = true;
+              info += `  [${i}] 🎮 TRIGGER!\n`;
+            }
+            if (gripBtn?.pressed) {
+              gripPressed = true;
+              info += `  [${i}] 👊 GRIP!\n`;
+            }
+
+            if (!triggerBtn?.pressed && !gripBtn?.pressed) {
+              info += `  [${i}] Idle\n`;
+            }
+          } else {
+            info += `  [${i}] Sin gamepad\n`;
+          }
+        }
+      } else {
+        info += "❌ Sin inputSources\n";
+      }
+    } catch (e) {
+      info += `❌ Error: ${e.message.substring(0, 30)}\n`;
+    }
+
+    info += "─────────────────\n";
+    
+    // Estado del cubo
+    const cuboVisible = this.marker?.visible ? "✓" : "✗";
+    const esperandoInteraccion = this.isWaitingForInteraction ? "✓" : "✗";
+    
+    info += `Cubo: ${cuboVisible}\n`;
+    info += `Esperando: ${esperandoInteraccion}\n`;
+
+    // Estado combinado
+    if (inputSourceCount > 0 && (triggerPressed || gripPressed)) {
+      info += "\n🟢 LISTO PARA ACTIVAR";
+      this.debugText.options.fontColor = '#00ff00';
+    } else if (inputSourceCount > 0) {
+      info += "\n🟡 Controladores OK";
+      this.debugText.options.fontColor = '#ffff00';
+    } else {
+      info += "\n🔴 Sin controladores";
+      this.debugText.options.fontColor = '#ff0000';
+    }
+
+    this.debugText.setText(info);
+    try {
+      this.debugPanel.updateLayouts();
+    } catch (e) {}
+  }
+
+  diagnosticXRCore() {
+    console.log("🔍 DIAGNOSTICO DE xb.core:");
+    console.log("xb.core:", xb.core);
+    console.log("xb.core.session:", xb.core?.session);
+    console.log("xb.core.frame:", xb.core?.frame);
+    console.log("xb.core.renderer:", xb.core?.renderer);
+    console.log("xb.core.renderer.xr:", xb.core?.renderer?.xr);
+    
+    try {
+      if (xb.core?.renderer?.xr?.getSession) {
+        const sess = xb.core.renderer.xr.getSession();
+        console.log("getSession() devolvió:", sess);
+        console.log("inputSources:", sess?.inputSources);
+        
+        if (sess?.inputSources) {
+          for (let i = 0; i < sess.inputSources.length; i++) {
+            console.log(`InputSource ${i}:`, sess.inputSources[i]);
+            console.log(`  - gamepad:`, sess.inputSources[i].gamepad);
+            console.log(`  - buttons:`, sess.inputSources[i].gamepad?.buttons);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Error en diagnostico:", e);
+    }
   }
 
   handleSelectStart(event) {
-    console.log("handleSelectStart llamado, event:", event);
+    console.log("✅ handleSelectStart llamado:", event);
     
     if (!this.marker || !this.marker.visible || !this.isWaitingForInteraction) {
-      console.log("No hay cubo visible o no está esperando interacción");
       return;
     }
 
     const now = performance.now();
     if (now - this.lastInteractionTime < 1500) {
-      console.log("Anti-spam activo");
       return;
     }
 
-    console.log("✅ ¡TRIGGER PROCESADO! Llamando triggerSuccess");
+    console.log("✅ Trigger detectado via evento!");
     this.triggerSuccess();
   }
 
-  handleMouseClick(event) {
-    if (!this.marker || !this.marker.visible || !this.isWaitingForInteraction) {
-      return;
-    }
+  setupClickHandling() {
+    console.log("🎯 Configurando click handling...");
+    
+    // ESTRATEGIA 1: Escuchar en navigator.xr si está disponible
+    setTimeout(() => {
+      try {
+        if (navigator.xr) {
+          console.log("✅ navigator.xr disponible");
+          
+          // Acceder a la isActive sesión actual
+          navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+            console.log("VR soportado:", supported);
+          });
+        }
+      } catch (e) {
+        console.log("navigator.xr no disponible:", e.message);
+      }
 
-    // Raycasting desde la cámara
-    this.pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
-    this.pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
+      // ESTRATEGIA 2: Acceder directamente a la sesión WebXR de XR Blocks
+      try {
+        if (xb.core && xb.core.session) {
+          console.log("✅ xb.core.session encontrada");
+          
+          // Escuchar selectstart
+          xb.core.session.addEventListener('selectstart', (e) => {
+            console.log("🎮 XR Session selectstart:", e);
+            this.handleSelectStart(e);
+          });
 
-    this.raycaster.setFromCamera(this.pointer, xb.core.camera);
-    const intersects = this.raycaster.intersectObject(this.marker);
+          // También input select
+          xb.core.session.addEventListener('select', (e) => {
+            console.log("🎮 XR Session select:", e);
+            this.handleSelectStart(e);
+          });
 
-    if (intersects.length > 0) {
-      console.log("✅ Clic en el cubo detectado");
-      this.triggerSuccess();
-    }
+          // Squeeze/pinch
+          xb.core.session.addEventListener('squeezestart', (e) => {
+            console.log("👊 XR Session squeezestart:", e);
+            this.handleSelectStart(e);
+          });
+        } else {
+          console.log("⚠️ xb.core.session NO encontrada");
+        }
+      } catch (e) {
+        console.error("Error accediendo session:", e);
+      }
+    }, 1000);
+
+    // ESTRATEGIA 3: Escuchar globalmente en window
+    window.addEventListener('selectstart', (e) => {
+      console.log("🪟 Window selectstart");
+      this.handleSelectStart(e);
+    });
+
+    // ESTRATEGIA 4: Hacer el cubo interactable con raycasting continuo
+    this.setupCubeInteraction();
+  }
+
+  setupCubeInteraction() {
+    // Polling continuo para ver si el trigger está presionado
+    console.log("🏁 setupCubeInteraction iniciado");
+    
+    let pollingAttempts = 0;
+
+    const pollingLoop = setInterval(() => {
+      try {
+        pollingAttempts++;
+
+        if (!this.marker || !this.marker.visible || !this.isWaitingForInteraction) {
+          return;
+        }
+
+        const now = performance.now();
+        if (now - this.lastInteractionTime < 1500) {
+          return; // Anti-spam
+        }
+
+        let triggerDetected = false;
+
+        // OPCIÓN 1: Acceder via xb.core.session.inputSources
+        try {
+          if (xb.core?.session?.inputSources) {
+            for (const source of xb.core.session.inputSources) {
+              if (source.gamepad?.buttons) {
+                const triggerButton = source.gamepad.buttons[0]; // Index trigger
+                const gripButton = source.gamepad.buttons[1];     // Grip
+                
+                if (triggerButton?.pressed) {
+                  console.log("✅ TRIGGER PRESIONADO (xb.core.session)");
+                  triggerDetected = true;
+                  break;
+                }
+                
+                if (gripButton?.pressed) {
+                  console.log("✅ GRIP PRESIONADO (xb.core.session)");
+                  triggerDetected = true;
+                  break;
+                }
+              }
+            }
+          }
+        } catch (e) {}
+
+        // OPCIÓN 2: Acceder via xb.core.frame (WebXR Frame)
+        if (!triggerDetected) {
+          try {
+            if (xb.core?.frame?.session?.inputSources) {
+              for (const source of xb.core.frame.session.inputSources) {
+                if (source.gamepad?.buttons?.[0]?.pressed) {
+                  console.log("✅ TRIGGER PRESIONADO (xb.core.frame.session)");
+                  triggerDetected = true;
+                  break;
+                }
+              }
+            }
+          } catch (e) {}
+        }
+
+        // OPCIÓN 3: Acceder via xb.core.renderer.xr
+        if (!triggerDetected) {
+          try {
+            if (xb.core?.renderer?.xr?.getSession) {
+              const session = xb.core.renderer.xr.getSession();
+              if (session?.inputSources) {
+                for (const source of session.inputSources) {
+                  if (source.gamepad?.buttons?.[0]?.pressed) {
+                    console.log("✅ TRIGGER PRESIONADO (xb.core.renderer.xr)");
+                    triggerDetected = true;
+                    break;
+                  }
+                }
+              }
+            }
+          } catch (e) {}
+        }
+
+        if (triggerDetected) {
+          this.triggerSuccess();
+        }
+
+        // Log cada 100 intentos para diagnosticar
+        if (pollingAttempts % 100 === 0) {
+          console.log(`⏱️ Polling activo - ${pollingAttempts} intentos, xb.core.session: ${!!xb.core?.session}`);
+        }
+
+      } catch (e) {
+        console.error("Error en polling:", e.message);
+      }
+    }, 50); // Revisar cada 50ms
+
+    // Guardar el intervalo por si queremos cancelarlo después
+    this.pollingLoop = pollingLoop;
   }
 
   createInstructionPanel() {
