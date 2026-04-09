@@ -134,8 +134,21 @@ class MaintenanceApp extends xb.Script {
     this.createInstructionPanel();
     await this.loadElectricalPanel();
     this.createInteractionMarker();
+    this.setupControllerEvents();
 
     this.updateStepUI();
+  }
+
+  setupControllerEvents() {
+    // Configurar eventos en los controladores para XR Blocks
+    xb.core.input.addEventListener('selectstart', (event) => {
+      console.log("🎮 selectstart detectado:", event);
+      this.onSelectStart(event);
+    });
+    
+    // Debug: Log cuando los controladores cambian
+    console.log("🔧 setupControllerEvents completado");
+    console.log("📍 xb.core.input.controllers disponibles:", xb.core.input?.controllers?.length || 0);
   }
 
   createInstructionPanel() {
@@ -311,24 +324,22 @@ class MaintenanceApp extends xb.Script {
   onSelectStart(event) {
     if (!this.isWaitingForInteraction || !this.marker.visible) return;
 
-    const controller = event.target;
-    
-    // Forma 1: Sistema nativo
-    const intersection = xb.core.user.select(this.marker, controller);
-    if (intersection) {
-      this.triggerSuccess();
-      return;
-    }
-    
-    // Forma 2: Respaldo manual seguro
-    const tempMatrix = new THREE.Matrix4();
-    tempMatrix.identity().extractRotation(controller.matrixWorld);
-    this.raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
-    this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-    
-    const intersects = this.raycaster.intersectObject(this.marker);
-    if (intersects.length > 0) {
-      this.triggerSuccess();
+    const now = performance.now();
+    if (now - this.lastInteractionTime < 1500) return; 
+
+    try {
+      const controller = event.target;
+      
+      // Verificar proximidad desde el controlador/mano al cubo
+      if (controller && controller.position) {
+        const distance = controller.position.distanceTo(this.marker.position);
+        if (distance < 0.3) { // 30cm de rango
+          this.triggerSuccess();
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Error en onSelectStart:", e);
     }
   }
 
@@ -336,7 +347,7 @@ class MaintenanceApp extends xb.Script {
   update() {
     super.update();
     
-    if (this.marker && this.marker.visible) {
+    if (this.marker && this.marker.visible && this.isWaitingForInteraction) {
       const now = performance.now();
       
       // Animación suave rotando el cubo
@@ -345,21 +356,70 @@ class MaintenanceApp extends xb.Script {
       this.marker.scale.setScalar(1.0 + Math.sin(now * 0.005) * 0.1);
 
       // Si ha pasado el tiempo de enfriamiento, comprueba colisión por proximidad
-      if (this.isWaitingForInteraction && (now - this.lastInteractionTime > 1500)) {
+      if (now - this.lastInteractionTime > 1500) {
         
         const markerWorldPos = new THREE.Vector3();
         this.marker.getWorldPosition(markerWorldPos);
 
-        // Distancia sencilla a los controladores (las palmas de las manos en Quest 3)
-        for (const controller of xb.core.input.controllers) {
-          const ctrlPos = new THREE.Vector3();
-          controller.getWorldPosition(ctrlPos);
-          
-          // Si el mando o la palma está a menos de 15 centímetros del cubo, ¡Éxito!
-          if (ctrlPos.distanceTo(markerWorldPos) < 0.15) {
-            this.triggerSuccess();
-            return; 
+        // MÉTODO 1: Verificar controladores/mandos
+        try {
+          if (xb.core.input && xb.core.input.controllers) {
+            for (const controller of xb.core.input.controllers) {
+              if (controller) {
+                const ctrlPos = new THREE.Vector3();
+                controller.getWorldPosition(ctrlPos);
+                
+                const dist = ctrlPos.distanceTo(markerWorldPos);
+                if (dist < 0.2) { // 20cm
+                  console.log("✅ ¡Toque detectado! Distancia:", dist.toFixed(3));
+                  this.triggerSuccess();
+                  return;
+                }
+              }
+            }
           }
+        } catch (e) {
+          console.warn("⚠️ Error en controllers:", e);
+        }
+
+        // MÉTODO 2: Verificar manos directamente (XR Blocks)
+        try {
+          if (xb.core.user && xb.core.user.hand) {
+            const hand = xb.core.user.hand;
+            if (hand && hand.position) {
+              const dist = hand.position.distanceTo(markerWorldPos);
+              if (dist < 0.2) {
+                console.log("✅ ¡Mano detectada! Distancia:", dist.toFixed(3));
+                this.triggerSuccess();
+                return;
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("⚠️ Error en hand:", e);
+        }
+
+        // MÉTODO 3: Buscar objetos con etiqueta "hand" o "controller"
+        try {
+          const allObjects = [];
+          this.traverse((obj) => {
+            if (obj.name && (obj.name.includes('controller') || obj.name.includes('hand'))) {
+              allObjects.push(obj);
+            }
+          });
+
+          for (const obj of allObjects) {
+            const objPos = new THREE.Vector3();
+            obj.getWorldPosition(objPos);
+            const dist = objPos.distanceTo(markerWorldPos);
+            if (dist < 0.2) {
+              console.log("✅ ¡Objeto detectado!", obj.name, "Distancia:", dist.toFixed(3));
+              this.triggerSuccess();
+              return;
+            }
+          }
+        } catch (e) {
+          console.warn("⚠️ Error en traverse:", e);
         }
       }
     }
@@ -370,10 +430,14 @@ document.addEventListener('DOMContentLoaded', function () {
   const options = new xb.Options();
   options.enableUI();
   
-  // Opciones de manos seguras y por defecto en XR Blocks
+  // Configurar manos y controladores para Meta Quest 3
   options.enableHands(); 
   options.hands.enabled = true;
-  options.hands.visualization = true; 
+  options.hands.visualization = true;
+  
+  // Habilitar controladores también
+  options.controllers.enabled = true;
+  options.controllers.visualization = true;
   
   options.reticles.enabled = true;
   options.simulator.defaultMode = xb.SimulatorMode.POSE;
